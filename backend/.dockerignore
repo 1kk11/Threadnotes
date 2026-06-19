@@ -1,0 +1,12 @@
+# Keep the image small and free of secrets — these are never copied into it.
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.env
+.env.*
+.git
+.gitignore
+*.log
+.DS_Store
+Thumbs.db

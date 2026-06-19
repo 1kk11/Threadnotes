@@ -1,0 +1,128 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+@import "tailwindcss";
+
+:root {
+  --bg-primary: #F8FAFC;        
+  --bg-secondary: #FFFFFF;      
+  
+  --accent-blue: #4F46E5;  
+  --accent-blue-dark: #4338CA;  
+  --accent-blue-light: #EEF2FF; 
+  
+  --text-primary: #0F172A;      
+  --text-secondary: #334155;    
+  --text-muted: #64748B;        
+  
+  --border-color: #E2E8F0;      
+  --border-focus: #818CF8;      
+  
+  --recording-red: #EF4444;
+  --recording-red-glow: rgba(239, 68, 68, 0.25);
+  --waveform-color: #818CF8;    
+  
+  --shadow-panel: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+  --shadow-button: 0 2px 4px rgba(79, 70, 229, 0.1), 0 4px 12px rgba(79, 70, 229, 0.15);
+  --shadow-button-hover: 0 4px 8px rgba(79, 70, 229, 0.15), 0 8px 16px rgba(79, 70, 229, 0.25);
+  
+  --ease-spring: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-smooth: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+* {
+  box-sizing: border-box;
+  -webkit-font-smoothing: antialiased; 
+  -moz-osx-font-smoothing: grayscale;
+}
+
+html, body {
+  max-width: 100vw;
+  overflow-x: hidden;
+  font-family: 'Inter', system-ui, sans-serif;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background-color: var(--accent-blue-light);
+  color: var(--accent-blue-dark);
+}
+
+/* React Calendar Custom Styles */
+.react-calendar-custom .has-meeting {
+  background-color: #dbeafe !important;
+  color: #1e40af !important;
+  font-weight: bold !important;
+}
+.react-calendar-custom .has-meeting:hover {
+  background-color: #bfdbfe !important;
+}
+
+@media screen and (max-width: 768px) {
+  input, select, textarea {
+    font-size: 16px !important;
+  }
+}
+
+.transcript-line {
+  animation: fadeInUp 0.4s var(--ease-spring) forwards;
+  will-change: transform, opacity;
+}
+
+select {
+  cursor: pointer;
+  transition: all 0.2s var(--ease-smooth);
+}
+
+select:focus, input:focus, textarea:focus {
+  outline: none;
+  border-color: var(--accent-blue) !important;
+  box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.15) !important;
+}
+
+@keyframes wave-bar {
+  0%, 100% { transform: scaleY(0.2); opacity: 0.6; background: var(--waveform-color); }
+  50% { transform: scaleY(1); opacity: 1; background: var(--accent-blue); }
+}
+
+.wave-bar {
+  width: 4px; 
+  background: var(--waveform-color);
+  border-radius: 99px; 
+  transform-origin: bottom;
+  will-change: transform;
+  animation: wave-bar 1.2s cubic-bezier(0.25, 0.46, 0.45, 0.94) infinite;
+}
+
+@media (min-width: 768px) {
+  .wave-bar { width: 6px; } 
+}
+
+.wave-bar:nth-child(even) { animation-delay: 0.2s; height: 32px; }
+.wave-bar:nth-child(odd) { animation-delay: 0.5s; height: 48px; }
+.wave-bar:nth-child(3n) { animation-delay: 0.8s; height: 64px; }
+.wave-bar.paused { animation-play-state: paused; transform: scaleY(0.2); opacity: 0.3; }
+
+@keyframes pulse-record {
+  0% { box-shadow: 0 0 0 0 var(--recording-red-glow); background-color: var(--recording-red); }
+  70% { box-shadow: 0 0 0 12px rgba(239, 68, 68, 0); background-color: #f87171; }
+  100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); background-color: var(--recording-red); }
+}
+
+.recording-pulse {
+  animation: pulse-record 2s cubic-bezier(0.4, 0, 0.6, 1) infinite !important;
+}
+
+@keyframes fadeInUp {
+  0% { opacity: 0; transform: translateY(12px) scale(0.98); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
+.custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+.custom-scrollbar::-webkit-scrollbar-thumb { 
+  background: #CBD5E1; 
+  border-radius: 99px; 
+  border: 2px solid var(--bg-secondary); 
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #94A3B8; }

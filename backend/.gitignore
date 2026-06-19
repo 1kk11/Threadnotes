@@ -1,0 +1,16 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Environment / secrets — never commit these
+.env
+.env.*
+
+# OS / editor junk
+.DS_Store
+Thumbs.db
+*.log

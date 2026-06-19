@@ -1,0 +1,50 @@
+# Render Infrastructure-as-Code for the ThreadNotes backend.
+# Builds the Docker image from backend/Dockerfile (ffmpeg + FastAPI).
+services:
+  - type: web
+    name: threadnotes-backend
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    plan: free
+    autoDeploy: true
+    # FastAPI serves /docs (200 OK) — used as a lightweight health check.
+    healthCheckPath: /docs
+    envVars:
+      # App secret for signing JWTs. Render generates a stable random value.
+      - key: JWT_SECRET
+        generateValue: true
+
+      # --- Azure Cosmos DB ---
+      - key: COSMOS_ENDPOINT
+        sync: false
+      - key: COSMOS_KEY
+        sync: false
+      - key: COSMOS_DATABASE
+        sync: false
+      - key: COSMOS_USERS_CONTAINER
+        value: users
+      - key: COSMOS_TRANSCRIPTS_CONTAINER
+        value: transcripts
+
+      # --- Azure Speech (live token minting) ---
+      - key: AZURE_SPEECH_KEY
+        sync: false
+      - key: AZURE_SPEECH_REGION
+        sync: false
+
+      # --- Azure OpenAI (diarization) ---
+      - key: AZURE_OPENAI_KEY
+        sync: false
+      - key: AZURE_OPENAI_ENDPOINT
+        sync: false
+      - key: AZURE_OPENAI_API_VERSION
+        value: 2025-04-01-preview
+      - key: AZURE_DIARIZE_DEPLOYMENT
+        value: gpt-4o-transcribe-diarize
+
+      # --- Email (OTP / password reset) ---
+      - key: EMAIL_SENDER
+        sync: false
+      - key: EMAIL_PASSWORD
+        sync: false

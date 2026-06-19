@@ -1,0 +1,13 @@
+# dependencies
+/node_modules
+
+# next.js
+/.next/
+/out/
+
+# electron build output
+/dist-electron/
+
+# misc
+*.log
+.DS_Store
