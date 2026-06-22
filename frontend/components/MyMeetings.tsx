@@ -146,7 +146,7 @@ export default function MyMeetings() {
               </div>
             </div>
 
-            <div className="p-4 flex-1 overflow-y-auto custom-scrollbar space-y-4">
+            <div className="p-4 flex-1 overflow-y-auto custom-scrollbar space-y-2">
               {processedMeetings.length === 0 ? (
                 <div className="flex flex-col items-center justify-center text-center py-20">
                   <p className="text-slate-400 text-sm font-medium">
@@ -159,7 +159,7 @@ export default function MyMeetings() {
                 processedMeetings.map((meeting) => (
                   <div
                     key={meeting.id}
-                    className="bg-white p-5 rounded-xl border border-slate-100 shadow-sm hover:shadow-md hover:border-indigo-200 transition-all duration-300 flex flex-col md:flex-row md:items-center justify-between gap-4 group w-full"
+                    className="bg-white px-4 py-3 rounded-xl border border-slate-100 shadow-sm hover:shadow-md hover:border-indigo-200 transition-all duration-300 flex flex-col md:flex-row md:items-center justify-between gap-4 group w-full"
                   >
                     <div className="flex-1 min-w-0 w-full">
                       <h3 className="font-bold text-[15px] text-slate-800 mb-1.5 truncate w-full">
@@ -325,13 +325,13 @@ export default function MyMeetings() {
             className="bg-white rounded-2xl w-full max-w-3xl max-h-[85vh] flex flex-col shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="p-6 border-b border-slate-200 flex justify-between items-center bg-slate-50 rounded-t-2xl">
-              <h2 className="text-xl font-bold text-slate-800">
+            <div className="p-6 border-b border-white/20 flex justify-between items-center bg-linear-to-r from-violet-500 to-blue-500 rounded-t-2xl">
+              <h2 className="text-xl font-bold text-white">
                 {selectedMeeting.topic}
               </h2>
               <button
                 onClick={() => setSelectedMeeting(null)}
-                className="p-2 text-slate-400 hover:bg-slate-200 hover:text-slate-800 rounded-full transition-colors"
+                className="p-2 text-white/80 hover:bg-white/20 hover:text-white rounded-full transition-colors"
               >
                 <svg
                   className="w-5 h-5"

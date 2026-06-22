@@ -1,5 +1,10 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
 @import "tailwindcss";
+
+/* Sora is loaded + self-hosted by next/font (see app/layout.tsx) and exposed as
+   the --font-sora CSS variable. Make it Tailwind's default sans family. */
+@theme {
+  --font-sans: var(--font-sora), ui-sans-serif, system-ui, sans-serif;
+}
 
 :root {
   --bg-primary: #F8FAFC;        
@@ -37,7 +42,7 @@
 html, body {
   max-width: 100vw;
   overflow-x: hidden;
-  font-family: 'Inter', system-ui, sans-serif;
+  font-family: var(--font-sora), system-ui, sans-serif;
   background-color: var(--bg-primary);
   color: var(--text-primary);
   text-rendering: optimizeLegibility;

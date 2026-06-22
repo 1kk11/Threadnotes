@@ -89,6 +89,15 @@ function createWindow() {
     icon: path.join(__dirname, "..", "build", "icon.ico"),
     backgroundColor: "#f8fafc",
     autoHideMenuBar: true,
+    // Frameless modern look: hide the OS title bar/text + menu, but keep the
+    // native window controls (min/max/close) via the Windows overlay so the
+    // app stays usable without building custom title-bar buttons.
+    titleBarStyle: "hidden",
+    titleBarOverlay: {
+      color: "#EBF2FA", // blends with the app background
+      symbolColor: "#475569", // slate caption-button glyphs
+      height: 40,
+    },
     show: false,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),

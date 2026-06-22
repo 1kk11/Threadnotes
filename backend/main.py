@@ -11,13 +11,11 @@ import uuid
 import bcrypt
 import jwt
 import random
-import smtplib
 import shutil
 import time
 import subprocess
 import glob
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
+import httpx
 from datetime import datetime, timezone, timedelta
 from azure.cosmos import CosmosClient
 from dotenv import load_dotenv
@@ -69,30 +67,55 @@ class ResetPasswordRequest(BaseModel):
     new_password: str
 
 def send_otp_email(target_email: str, otp: str, subject_prefix: str):
-    sender_email = os.getenv("EMAIL_SENDER")
-    sender_password = os.getenv("EMAIL_PASSWORD")
-    
-    if not sender_email or not sender_password:
+    # Delivery via the Resend HTTP API (https) — works on hosts like Render that
+    # block outbound SMTP (port 587). No SMTP, no blocked ports.
+    api_key = os.getenv("RESEND_API_KEY")
+    # `from` must be a Resend-verified sender. Use your verified domain address,
+    # or "onboarding@resend.dev" for testing (only delivers to your own account).
+    sender_email = os.getenv("EMAIL_SENDER", "onboarding@resend.dev")
+
+    print(
+        f"[email] target={target_email} | api_key_set={bool(api_key)} | from={sender_email}"
+    )
+
+    if not api_key:
+        print("[email] ABORT — RESEND_API_KEY missing from environment")
         raise HTTPException(status_code=500, detail="Email configuration missing in backend")
 
-    msg = MIMEMultipart()
-    msg['From'] = sender_email
-    msg['To'] = target_email
-    msg['Subject'] = f"ThreadNotes - {subject_prefix} OTP"
-    body = f"Your OTP for {subject_prefix} is: {otp}\n\nPlease do not share this with anyone."
-    msg.attach(MIMEText(body, 'plain'))
-    
+    payload = {
+        "from": sender_email,
+        "to": [target_email],
+        "subject": f"ThreadNotes - {subject_prefix} OTP",
+        "text": f"Your OTP for {subject_prefix} is: {otp}\n\nPlease do not share this with anyone.",
+    }
+
     try:
-        server = smtplib.SMTP('smtp.gmail.com', 587)
-        server.starttls()
-        server.login(sender_email, sender_password)
-        server.send_message(msg)
-        server.quit()
+        resp = httpx.post(
+            "https://api.resend.com/emails",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=20,
+        )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to send email: {str(e)}")
+        print(f"[email] HTTP request failed ({type(e).__name__}): {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to send email: {e}")
+
+    if resp.status_code >= 400:
+        # Resend returns a JSON error body — surface it to the logs.
+        print(f"[email] Resend error {resp.status_code}: {resp.text}")
+        raise HTTPException(status_code=500, detail=f"Email provider error: {resp.text}")
+
+    try:
+        email_id = resp.json().get("id")
+    except Exception:
+        email_id = None
+    print(f"[email] sent OK -> {target_email} (id={email_id})")
 
 from transcriber import Transcriber
-from thick_client import router as thick_client_router
+from thick_client import router as thick_client_router, get_current_user
 
 app = FastAPI()
 
@@ -106,6 +129,46 @@ app.add_middleware(
 
 # Thick-client routes: GET /azure/token, POST /diarize/stream
 app.include_router(thick_client_router)
+
+
+# --- Meeting summary email via Gmail API (see email_service.py) ---
+class MeetingEmailRequest(BaseModel):
+    to: EmailStr
+    title: str
+    summary_html: str
+
+
+@app.post("/api/send-notes")
+async def send_notes(
+    req: MeetingEmailRequest, user: dict = Depends(get_current_user)
+):
+    # Auth required + recipient locked to the caller's own account, so this
+    # can't be used as an open relay / spam cannon from our Gmail.
+    owner = str(user.get("sub", "")).strip().lower()
+    if not owner or req.to.strip().lower() != owner:
+        raise HTTPException(
+            status_code=403, detail="You can only email your own account."
+        )
+
+    # Reject email-header injection via the subject (CR/LF) and cap length.
+    if any(c in req.title for c in ("\r", "\n")) or len(req.title) > 200:
+        raise HTTPException(status_code=400, detail="Invalid meeting title.")
+
+    # Lazy import so the app still boots if the Google libs aren't installed yet.
+    try:
+        from email_service import send_meeting_email
+    except Exception as e:
+        return {"status": "error", "message": f"Email service unavailable: {e}"}
+
+    result = await send_meeting_email(
+        to_email=req.to,
+        subject=f"ThreadNotes — {req.title}",
+        html_content=req.summary_html,
+    )
+    if not result.get("success"):
+        return {"status": "error", "message": result.get("error")}
+    return {"status": "success", "id": result.get("id")}
+
 
 @app.post("/send-signup-otp")
 def send_signup_otp(req: OTPRequest):

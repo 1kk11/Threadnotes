@@ -43,8 +43,9 @@ services:
       - key: AZURE_DIARIZE_DEPLOYMENT
         value: gpt-4o-transcribe-diarize
 
-      # --- Email (OTP / password reset) ---
-      - key: EMAIL_SENDER
+      # --- Email via Resend HTTP API (OTP / password reset) ---
+      # SMTP is blocked on Render, so we deliver over HTTPS instead.
+      - key: RESEND_API_KEY
         sync: false
-      - key: EMAIL_PASSWORD
+      - key: EMAIL_SENDER          # Resend-verified "from" address
         sync: false

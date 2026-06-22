@@ -1,6 +1,16 @@
 import type { Metadata, Viewport } from "next";
+import { Sora } from "next/font/google";
 import "./globals.css";
 import AuthInterceptor from "@/components/AuthInterceptor";
+
+// Self-hosted by next/font (no external request, preloaded, fallback-metric
+// adjusted) — eliminates the FOUT the old Google Fonts <link> caused.
+const sora = Sora({
+  subsets: ["latin"],
+  weight: ["300", "400", "500", "600", "700"],
+  display: "swap",
+  variable: "--font-sora",
+});
 
 export const metadata: Metadata = {
   title: "ThreadNotes – AI Real-time Meeting Assistant",
@@ -20,9 +30,9 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
-      <body className="antialiased bg-[var(--bg-primary)] text-[var(--text-primary)] m-0 p-0 overflow-hidden">
-        <div className="w-full h-[100dvh]">
+    <html lang="en" className={sora.variable}>
+      <body className="m-0 overflow-hidden bg-[var(--bg-primary)] p-0 font-sans antialiased text-[var(--text-primary)]">
+        <div className="h-[100dvh] w-full">
           {/* 👈 ProtectedRoute removed from RootLayout. It should only wrap specific pages. */}
           <AuthInterceptor />
           {children}
