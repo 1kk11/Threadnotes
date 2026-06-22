@@ -12,9 +12,6 @@ const path = require("path");
 const fs = require("fs");
 const { pathToFileURL } = require("url");
 
-// SaaS model: this Electron app is a pure frontend client. It does NOT run or
-// bundle the backend — it connects to the central cloud API configured at build
-// time via NEXT_PUBLIC_API_URL (see .env.production).
 const isDev = !app.isPackaged;
 const DEV_URL = "http://localhost:3000";
 const OUT_DIR = path.join(__dirname, "..", "out");
@@ -89,13 +86,10 @@ function createWindow() {
     icon: path.join(__dirname, "..", "build", "icon.ico"),
     backgroundColor: "#f8fafc",
     autoHideMenuBar: true,
-    // Frameless modern look: hide the OS title bar/text + menu, but keep the
-    // native window controls (min/max/close) via the Windows overlay so the
-    // app stays usable without building custom title-bar buttons.
     titleBarStyle: "hidden",
     titleBarOverlay: {
-      color: "#EBF2FA", // blends with the app background
-      symbolColor: "#475569", // slate caption-button glyphs
+      color: "#EBF2FA",
+      symbolColor: "#475569",
       height: 40,
     },
     show: false,

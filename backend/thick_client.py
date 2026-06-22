@@ -1,26 +1,4 @@
-"""
-ThreadNotes — "Thick Client, Thin Server" backend (REFERENCE BOILERPLATE).
-
-This is a standalone FastAPI router. It does NOT run from this reference folder
-as-is — to enable it:
-
-  1. Move this file into `backend/` (next to transcriber.py, so the
-     `from transcriber import interpolate_words` import resolves).
-  2. In backend/main.py add:
-
-         from thick_client import router as thick_client_router
-         app.include_router(thick_client_router)
-
-  3. Tighten CORS (see SECURITY NOTES at the bottom).
-
-Design: the Azure Speech *subscription key* never leaves the server. The browser
-gets a ~10-minute authorization token instead. Large audio is spooled to disk and
-streamed into OpenAI, so the server never holds the whole file in RAM.
-
-Routes:
-  GET  /azure/token     -> short-lived Azure Speech token (JWT-protected)
-  POST /diarize/stream  -> stream an uploaded file to gpt-4o-transcribe-diarize
-"""
+"""ThreadNotes "Thick Client, Thin Server" FastAPI router for Azure Speech tokens and diarized transcription."""
 import os
 import uuid
 import json
@@ -32,7 +10,6 @@ import jwt
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
-# When this file lives in backend/, reuse the existing word-timing helper.
 from transcriber import interpolate_words
 
 SECRET_KEY = os.getenv("JWT_SECRET", "threadnotes-super-secret-key")
@@ -45,10 +22,6 @@ router = APIRouter()
 _bearer = HTTPBearer(auto_error=True)
 
 
-# --------------------------------------------------------------------------
-# AUTH — decode the app's own JWT (issued by /login). Protects token minting
-# so only authenticated users can obtain Azure credentials.
-# --------------------------------------------------------------------------
 def get_current_user(
     creds: HTTPAuthorizationCredentials = Depends(_bearer),
 ) -> dict:
@@ -60,10 +33,6 @@ def get_current_user(
         raise HTTPException(status_code=401, detail="Invalid token")
 
 
-# --------------------------------------------------------------------------
-# AZURE SPEECH TOKEN — minted server-side, valid ~10 minutes. The browser SDK
-# uses SpeechConfig.fromAuthorizationToken(token, region) with this.
-# --------------------------------------------------------------------------
 @router.get("/azure/token")
 async def get_azure_speech_token(_user: dict = Depends(get_current_user)):
     if not AZURE_SPEECH_KEY or not AZURE_SPEECH_REGION:
@@ -86,14 +55,9 @@ async def get_azure_speech_token(_user: dict = Depends(get_current_user)):
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Token issue failed: {e}")
 
-    # issueToken returns the JWT as plain text.
     return {"token": resp.text, "region": AZURE_SPEECH_REGION}
 
 
-# --------------------------------------------------------------------------
-# STREAM-FORWARD — receive the final recording and forward it to the diarize
-# model with bounded memory.
-# --------------------------------------------------------------------------
 def _build_openai_client():
     from openai import OpenAI, AzureOpenAI
 
@@ -133,8 +97,7 @@ def _save_transcript_to_cosmos(user_id: str, segments: list) -> str:
             }
         )
         return doc_id
-    except Exception as e:
-        print(f"⚠️ Cosmos transcript save failed: {e}")
+    except Exception:
         return ""
 
 
@@ -143,17 +106,9 @@ async def diarize_stream(
     file: UploadFile = File(...),
     user: dict = Depends(get_current_user),
 ):
-    """
-    RAM-safety: the upload is spooled to a temp file in 1 MB chunks (never held
-    whole in RAM), then streamed from disk into the OpenAI multipart request.
-
-    NOTE: gpt-4o-transcribe-diarize caps a single request at ~25 MB. For genuine
-    multi-hour media, pre-chunk with ffmpeg before calling this (the upload path
-    in main.py already demonstrates that pattern).
-    """
+    """Spool the upload to disk in bounded chunks, then stream it to the diarize model."""
     tmp_path = None
     try:
-        # 1) Spill upload to disk in bounded chunks.
         with tempfile.NamedTemporaryFile(delete=False, suffix=".audio") as tmp:
             tmp_path = tmp.name
             while True:
@@ -162,7 +117,6 @@ async def diarize_stream(
                     break
                 tmp.write(chunk)
 
-        # 2) Stream from disk -> OpenAI (handle is read lazily by httpx).
         client = _build_openai_client()
         deployment = os.getenv(
             "AZURE_DIARIZE_DEPLOYMENT", "gpt-4o-transcribe-diarize"
@@ -181,7 +135,6 @@ async def diarize_stream(
             else (resp if isinstance(resp, dict) else json.loads(str(resp)))
         )
 
-        # 3) Map -> frontend shape + interpolated word timings.
         speaker_map: dict = {}
         segments = []
         for seg in data.get("segments") or []:
@@ -215,25 +168,3 @@ async def diarize_stream(
     finally:
         if tmp_path and os.path.exists(tmp_path):
             os.remove(tmp_path)
-
-
-# ==========================================================================
-# SECURITY NOTES (apply in backend/main.py)
-# --------------------------------------------------------------------------
-# 1) CORS — your current config (allow_origins=["*"] + allow_credentials=True)
-#    is rejected by browsers. Pin explicit origins:
-#
-#       from fastapi.middleware.cors import CORSMiddleware
-#       app.add_middleware(
-#           CORSMiddleware,
-#           allow_origins=["http://localhost:3000", "app://local"],
-#           allow_credentials=True,
-#           allow_methods=["GET", "POST", "OPTIONS"],
-#           allow_headers=["Authorization", "Content-Type"],
-#       )
-#
-# 2) The subscription key stays in backend .env only. The browser only ever
-#    holds the 10-minute token.
-# 3) Both routes require a valid app JWT (Depends(get_current_user)).
-# 4) Consider a per-user rate limit on /azure/token to prevent token farming.
-# ==========================================================================

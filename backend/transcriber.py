@@ -34,9 +34,9 @@ def interpolate_words(text: str, start: float, end: float) -> list:
     for w in words:
         w_weight = len(w) + 1
         if w.endswith(('.', '?', '!', ',', ';', '-')):
-            w_weight += 5 
+            w_weight += 5
         weights.append(w_weight)
-        
+
     total = sum(weights)
     duration = max(0.0, end - start)
     out = []
@@ -47,10 +47,10 @@ def interpolate_words(text: str, start: float, end: float) -> list:
         cursor += w_dur
         w_end = round(min(end, cursor), 3)
         out.append({"word": w, "start": w_start, "end": w_end})
-        
+
     if out:
         out[-1]["end"] = round(end, 3)
-        
+
     return out
 
 
@@ -92,11 +92,7 @@ class Transcriber:
                 response_format="diarized_json",
                 extra_body={"chunking_strategy": "auto"},
             )
-        except Exception as e:
-            print(
-                f"⚠️ Diarized Transcription failed "
-                f"[deployment='{self.diarize_deployment}']: {e}"
-            )
+        except Exception:
             return []
 
         if hasattr(resp, "model_dump"):
@@ -150,9 +146,6 @@ class Transcriber:
     def transcribe_audio_file(self, file_path: str) -> str:
         for attempt in range(1, 4):
             try:
-                print(
-                    f"⚡ Transcribe (attempt {attempt}): {os.path.basename(file_path)}"
-                )
                 with open(file_path, "rb") as audio_file:
                     response = self.client.audio.transcriptions.create(
                         model=self.file_deployment,
@@ -169,16 +162,11 @@ class Transcriber:
 
             except Exception as e:
                 error_msg = str(e)
-                print(
-                    f"⚠️ File transcription failed "
-                    f"[deployment='{self.file_deployment}']: {error_msg}"
-                )
                 if "rate limit" in error_msg.lower() or "429" in error_msg:
                     wait_time = max(self._parse_retry_after(error_msg), 5)
                 else:
                     wait_time = min(2 ** attempt, 10)
                 if attempt < 3:
-                    print(f"🔄 Retrying in {wait_time}s...")
                     time.sleep(wait_time)
                     continue
                 return ""

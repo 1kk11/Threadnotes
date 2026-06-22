@@ -18,16 +18,13 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-# gmail.send is the minimal scope needed to send mail.
 SCOPES = ["https://www.googleapis.com/auth/gmail.send"]
 
-# Paths default to the backend dir locally; override via env on Render
-# (e.g. GMAIL_CREDENTIALS_PATH=/etc/secrets/credentials.json).
 CREDENTIALS_PATH = os.getenv("GMAIL_CREDENTIALS_PATH", "credentials.json")
 TOKEN_PATH = os.getenv("GMAIL_TOKEN_PATH", "token.json")
 SENDER = os.getenv("EMAIL_SENDER", "threadnotes12@gmail.com")
 
-_service = None  # cached Gmail service across calls
+_service = None
 
 
 def _save_token(creds: Credentials) -> None:
@@ -36,8 +33,8 @@ def _save_token(creds: Credentials) -> None:
     try:
         with open(TOKEN_PATH, "w") as f:
             f.write(creds.to_json())
-    except OSError as e:
-        print(f"[email] could not persist token ({e}); continuing in-memory")
+    except OSError:
+        pass
 
 
 def _load_credentials(allow_interactive: bool = False) -> Credentials:
@@ -57,7 +54,7 @@ def _load_credentials(allow_interactive: bool = False) -> Credentials:
 
     if allow_interactive:
         flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_PATH, SCOPES)
-        creds = flow.run_local_server(port=0)  # opens browser for consent
+        creds = flow.run_local_server(port=0)
         _save_token(creds)
         return creds
 
@@ -93,18 +90,12 @@ async def send_meeting_email(to_email: str, subject: str, html_content: str) -> 
     try:
         result = await asyncio.to_thread(_send_sync, to_email, subject, html_content)
         msg_id = result.get("id")
-        print(f"[email] sent to {to_email} (id={msg_id})")
         return {"success": True, "id": msg_id}
     except HttpError as e:
-        print(f"[email] Gmail API error sending to {to_email}: {e}")
         return {"success": False, "error": f"Gmail API error: {e}"}
     except Exception as e:
-        print(f"[email] send failed for {to_email} ({type(e).__name__}): {e}")
         return {"success": False, "error": str(e)}
 
 
 if __name__ == "__main__":
-    # One-time LOCAL setup: opens a browser, you grant consent, token.json is
-    # written. Run this once before deploying:  python email_service.py
     _load_credentials(allow_interactive=True)
-    print("✅ token.json created — you can now deploy it as a Render secret file.")

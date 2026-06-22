@@ -2,6 +2,8 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import InfoModal from "@/components/ui/InfoModal";
+import { getValidToken } from "@/lib/auth";
 
 export default function AuthPage() {
   const [authMode, setAuthMode] = useState<"login" | "signup" | "forgot">(
@@ -9,7 +11,6 @@ export default function AuthPage() {
   );
   const [forgotStep, setForgotStep] = useState(1);
 
-  // --- Nayi States (Signup Verification Ke Liye) ---
   const [isEmailVerified, setIsEmailVerified] = useState(false);
   const [signupOtpSent, setSignupOtpSent] = useState(false);
   const [signupOtp, setSignupOtp] = useState("");
@@ -18,20 +19,21 @@ export default function AuthPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-  const [otp, setOtp] = useState(""); // Forgot password wala OTP
+  const [otp, setOtp] = useState("");
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [info, setInfo] = useState<{ title: string; message: string } | null>(
+    null,
+  );
   const router = useRouter();
 
   const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
   useEffect(() => {
-    const token = localStorage.getItem("token");
-    if (token) router.push("/");
+    if (getValidToken()) router.replace("/");
   }, [router]);
 
-  // --- API Call: Send Signup OTP ---
   const handleSendSignupOtp = async () => {
     if (!email) {
       setError("Please enter your email first.");
@@ -49,7 +51,10 @@ export default function AuthPage() {
       if (!res.ok)
         throw new Error(data.detail || "Failed to send verification OTP");
       setSignupOtpSent(true);
-      alert("Verification OTP sent to your email!");
+      setInfo({
+        title: "OTP Sent",
+        message: "A verification OTP has been sent to your email.",
+      });
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -57,7 +62,6 @@ export default function AuthPage() {
     }
   };
 
-  // --- API Call: Verify Signup OTP ---
   const handleVerifySignupOtp = async () => {
     if (!signupOtp || signupOtp.length < 6) return;
     setLoading(true);
@@ -71,7 +75,10 @@ export default function AuthPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || "Invalid verification OTP");
       setIsEmailVerified(true);
-      alert("Email Verified! You can now set your password.");
+      setInfo({
+        title: "Email Verified",
+        message: "Your email is verified. You can now set your password.",
+      });
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -79,7 +86,6 @@ export default function AuthPage() {
     }
   };
 
-  // --- Main Auth Handler ---
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
@@ -100,7 +106,11 @@ export default function AuthPage() {
         const data = await res.json();
         if (!res.ok) throw new Error(data.detail || "Signup failed");
 
-        alert("Account Created successfully! Please login.");
+        setInfo({
+          title: "Account Created",
+          message:
+            "Your account was created successfully. Please log in to continue.",
+        });
         setAuthMode("login");
         setPassword("");
         setName("");
@@ -117,7 +127,10 @@ export default function AuthPage() {
           if (!res.ok) throw new Error(data.detail || "Failed to send OTP");
 
           setForgotStep(2);
-          alert("Password Reset OTP sent to your email!");
+          setInfo({
+            title: "OTP Sent",
+            message: "A password reset OTP has been sent to your email.",
+          });
         } else {
           if (password !== confirmPassword)
             throw new Error("Passwords do not match");
@@ -130,9 +143,11 @@ export default function AuthPage() {
           const data = await res.json();
           if (!res.ok) throw new Error(data.detail || "Reset failed");
 
-          alert(
-            "Password Reset Successful! Please login with your new password.",
-          );
+          setInfo({
+            title: "Password Reset",
+            message:
+              "Your password has been reset. Please log in with your new password.",
+          });
           setAuthMode("login");
           setForgotStep(1);
           setPassword("");
@@ -161,9 +176,7 @@ export default function AuthPage() {
 
   return (
     <div className="flex min-h-screen bg-slate-50 lg:bg-white">
-      {/* LEFT SIDE: BRANDING BANNER (Visible only on Desktop) */}
       <div className="hidden lg:flex w-1/2 bg-gradient-to-br from-indigo-600 to-indigo-800 items-center justify-center p-12 text-white relative overflow-hidden">
-        {/* Subtle background decoration */}
         <div className="absolute top-[-10%] left-[-10%] w-96 h-96 bg-indigo-500 rounded-full mix-blend-multiply filter blur-3xl opacity-50 animate-pulse"></div>
         <div
           className="absolute bottom-[-10%] right-[-10%] w-96 h-96 bg-indigo-400 rounded-full mix-blend-multiply filter blur-3xl opacity-50 animate-pulse"
@@ -196,10 +209,8 @@ export default function AuthPage() {
         </div>
       </div>
 
-      {/* RIGHT SIDE: AUTHENTICATION FORM */}
       <div className="w-full lg:w-1/2 flex flex-col items-center justify-center p-6 sm:p-12 min-h-screen lg:min-h-0 bg-white shadow-[0_-20px_40px_-20px_rgba(0,0,0,0.05)] lg:shadow-none rounded-t-[2.5rem] lg:rounded-none mt-4 lg:mt-0">
         <div className="w-full max-w-sm my-auto lg:my-0">
-          {/* 📱 MOBILE PREMIUM BRANDING (Visible only on Mobile) */}
           <div className="lg:hidden mb-10 flex items-center gap-3">
             <div className="w-12 h-12 bg-indigo-600 rounded-2xl flex items-center justify-center shadow-lg shadow-indigo-600/30 shrink-0">
               <svg
@@ -261,7 +272,6 @@ export default function AuthPage() {
           )}
 
           <form onSubmit={handleAuth} className="space-y-5">
-            {/* NAME FIELD (Signup only) */}
             {authMode === "signup" && (
               <div>
                 <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
@@ -278,7 +288,6 @@ export default function AuthPage() {
               </div>
             )}
 
-            {/* EMAIL FIELD (All Modes) */}
             <div>
               <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
                 Work Email
@@ -303,7 +312,6 @@ export default function AuthPage() {
                   }
                 />
 
-                {/* SIGNUP: VERIFY BUTTON */}
                 {authMode === "signup" && !isEmailVerified && (
                   <button
                     type="button"
@@ -317,7 +325,6 @@ export default function AuthPage() {
               </div>
             </div>
 
-            {/* SIGNUP: OTP CONFIRMATION FIELD */}
             {authMode === "signup" && signupOtpSent && !isEmailVerified && (
               <div className="animate-in fade-in slide-in-from-top-2 duration-300">
                 <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
@@ -345,7 +352,6 @@ export default function AuthPage() {
               </div>
             )}
 
-            {/* FORGOT PASSWORD: OTP FIELD */}
             {authMode === "forgot" && forgotStep === 2 && (
               <div className="animate-in fade-in slide-in-from-top-2 duration-300">
                 <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
@@ -363,7 +369,6 @@ export default function AuthPage() {
               </div>
             )}
 
-            {/* PASSWORD FIELD */}
             {(authMode !== "forgot" ||
               (authMode === "forgot" && forgotStep === 2)) && (
               <div>
@@ -405,7 +410,6 @@ export default function AuthPage() {
               </div>
             )}
 
-            {/* FORGOT PASSWORD: CONFIRM PASSWORD */}
             {authMode === "forgot" && forgotStep === 2 && (
               <div className="animate-in fade-in slide-in-from-top-2 duration-300">
                 <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
@@ -422,7 +426,6 @@ export default function AuthPage() {
               </div>
             )}
 
-            {/* MAIN SUBMIT BUTTON */}
             <button
               type="submit"
               disabled={loading || (authMode === "signup" && !isEmailVerified)}
@@ -440,7 +443,6 @@ export default function AuthPage() {
             </button>
           </form>
 
-          {/* TOGGLE MODES */}
           <div className="mt-8 text-center text-sm text-slate-600 font-medium">
             {authMode === "forgot" ? (
               <button
@@ -478,6 +480,13 @@ export default function AuthPage() {
           </div>
         </div>
       </div>
+
+      <InfoModal
+        open={!!info}
+        title={info?.title || ""}
+        message={info?.message || ""}
+        onClose={() => setInfo(null)}
+      />
     </div>
   );
 }

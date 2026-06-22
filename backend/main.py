@@ -38,8 +38,8 @@ database = client.get_database_client(DATABASE_NAME)
 users_cont = database.get_container_client(USERS_CONTAINER)
 
 progress_tracker: Dict[str, Dict[str, int]] = {}
-otp_storage: Dict[str, str] = {}         
-signup_otp_storage: Dict[str, str] = {}  
+otp_storage: Dict[str, str] = {}
+signup_otp_storage: Dict[str, str] = {}
 
 class UserSignup(BaseModel):
     name: str
@@ -66,8 +66,6 @@ class ResetPasswordRequest(BaseModel):
     new_password: str
 
 def send_otp_email(target_email: str, otp: str, subject_prefix: str):
-    # Delivery via the Gmail API (HTTPS) — works on hosts like Render that block
-    # outbound SMTP (port 587). Reuses the same OAuth credentials as send-notes.
     subject = f"ThreadNotes — {subject_prefix} OTP"
     html_content = f"""\
 <div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;max-width:480px;margin:0 auto;padding:24px;color:#0f172a">
@@ -78,14 +76,11 @@ def send_otp_email(target_email: str, otp: str, subject_prefix: str):
 </div>"""
 
     try:
-        # Imported lazily so a missing Gmail token can't crash app import.
         from email_service import _send_sync
-        result = _send_sync(target_email, subject, html_content)
+        _send_sync(target_email, subject, html_content)
     except Exception as e:
-        print(f"[email] OTP send failed for {target_email} ({type(e).__name__}): {e}")
+        print(f"[email] OTP dispatch FAILED for {target_email}: {type(e).__name__}: {e}")
         raise HTTPException(status_code=500, detail="Failed to send verification email.")
-
-    print(f"[email] OTP sent OK -> {target_email} (id={result.get('id')})")
 
 from transcriber import Transcriber
 from thick_client import router as thick_client_router, get_current_user
@@ -100,11 +95,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Thick-client routes: GET /azure/token, POST /diarize/stream
 app.include_router(thick_client_router)
 
 
-# --- Meeting summary email via Gmail API (see email_service.py) ---
 class MeetingEmailRequest(BaseModel):
     to: EmailStr
     title: str
@@ -115,19 +108,15 @@ class MeetingEmailRequest(BaseModel):
 async def send_notes(
     req: MeetingEmailRequest, user: dict = Depends(get_current_user)
 ):
-    # Auth required + recipient locked to the caller's own account, so this
-    # can't be used as an open relay / spam cannon from our Gmail.
     owner = str(user.get("sub", "")).strip().lower()
     if not owner or req.to.strip().lower() != owner:
         raise HTTPException(
             status_code=403, detail="You can only email your own account."
         )
 
-    # Reject email-header injection via the subject (CR/LF) and cap length.
     if any(c in req.title for c in ("\r", "\n")) or len(req.title) > 200:
         raise HTTPException(status_code=400, detail="Invalid meeting title.")
 
-    # Lazy import so the app still boots if the Google libs aren't installed yet.
     try:
         from email_service import send_meeting_email
     except Exception as e:
@@ -174,7 +163,7 @@ def signup(user: UserSignup):
         "email": user.email, "password": hashed_pw, "createdAt": datetime.now(timezone.utc).isoformat()
     }
     users_cont.create_item(user_doc)
-    signup_otp_storage.pop(user.email, None) 
+    signup_otp_storage.pop(user.email, None)
     return {"status": "success", "message": "Account created"}
 
 @app.post("/login")
@@ -189,26 +178,64 @@ def login(user: UserLogin):
 
 @app.post("/forgot-password")
 def forgot_password(req: ForgotPasswordRequest):
-    user_list = list(users_cont.query_items("SELECT * FROM c WHERE c.email = @email", parameters=[{"name": "@email", "value": req.email}], enable_cross_partition_query=True))
-    if not user_list: return {"status": "success", "message": "If email exists, OTP sent."}
+    email = req.email.strip().lower()
+    user_list = list(users_cont.query_items(
+        "SELECT * FROM c WHERE LOWER(c.email) = @email",
+        parameters=[{"name": "@email", "value": email}],
+        enable_cross_partition_query=True,
+    ))
+    if not user_list:
+        print(f"[forgot-password] no account for {email}; returning generic response")
+        return {"status": "success", "message": "If an account exists, a reset OTP has been sent."}
 
     otp = str(random.randint(100000, 999999))
-    otp_storage[req.email] = otp
-    send_otp_email(req.email, otp, "Password Reset")
-    return {"status": "success", "message": "OTP sent successfully."}
+    otp_storage[email] = otp
+
+    try:
+        send_otp_email(user_list[0]["email"], otp, "Password Reset")
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[forgot-password] email dispatch failed: {type(e).__name__}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to send reset OTP.")
+
+    return {"status": "success", "message": "If an account exists, a reset OTP has been sent."}
 
 @app.post("/reset-password")
 def reset_password(req: ResetPasswordRequest):
-    if otp_storage.get(req.email) != req.otp: raise HTTPException(status_code=400, detail="Invalid or expired OTP")
-    
-    user_list = list(users_cont.query_items("SELECT * FROM c WHERE c.email = @email", parameters=[{"name": "@email", "value": req.email}], enable_cross_partition_query=True))
+    email = req.email.strip().lower()
+    if otp_storage.get(email) != req.otp: raise HTTPException(status_code=400, detail="Invalid or expired OTP")
+
+    user_list = list(users_cont.query_items("SELECT * FROM c WHERE LOWER(c.email) = @email", parameters=[{"name": "@email", "value": email}], enable_cross_partition_query=True))
     if not user_list: raise HTTPException(status_code=404, detail="User not found")
-        
+
     user_doc = user_list[0]
     user_doc['password'] = bcrypt.hashpw(req.new_password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
     users_cont.upsert_item(user_doc)
-    otp_storage.pop(req.email, None) 
+    otp_storage.pop(email, None)
     return {"status": "success", "message": "Password updated successfully!"}
+
+@app.delete("/delete-account")
+def delete_account(user: dict = Depends(get_current_user)):
+    email = str(user.get("sub", "")).strip()
+    if not email:
+        raise HTTPException(status_code=401, detail="Invalid session")
+
+    matches = list(users_cont.query_items(
+        "SELECT * FROM c WHERE c.email = @email",
+        parameters=[{"name": "@email", "value": email}],
+        enable_cross_partition_query=True,
+    ))
+    if not matches:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    pk_field = users_cont.read()["partitionKey"]["paths"][0].lstrip("/")
+    for doc in matches:
+        users_cont.delete_item(item=doc["id"], partition_key=doc.get(pk_field))
+
+    otp_storage.pop(email, None)
+    signup_otp_storage.pop(email, None)
+    return {"status": "success", "message": "Account deleted"}
 
 @app.get("/progress/{filename}")
 async def get_progress(filename: str):
@@ -219,7 +246,7 @@ def process_meeting(file: UploadFile = File(...), meeting_type: str = Form("Gene
     tmp_path = None
     filename = file.filename
     progress_tracker[filename] = {"current": 0, "total": 1}
-    
+
     try:
         file_ext = pathlib.Path(filename.lower()).suffix
         audio_exts = {'.mp3', '.wav', '.webm', '.m4a', '.mpeg', '.mp4'}
@@ -229,15 +256,15 @@ def process_meeting(file: UploadFile = File(...), meeting_type: str = Form("Gene
             with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as tmp:
                 shutil.copyfileobj(file.file, tmp)
                 tmp_path = tmp.name
-            
+
             chunk_dir = tempfile.mkdtemp()
             chunk_pattern = os.path.join(chunk_dir, f"chunk_%04d{file_ext}")
-            
+
             cmd = ["ffmpeg", "-y", "-i", tmp_path, "-vn", "-c:a", "copy", "-f", "segment", "-segment_time", "60", "-reset_timestamps", "1", chunk_pattern]
             process_bg = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-            ts = Transcriber() 
-            transcript_parts = {} 
+            ts = Transcriber()
+            transcript_parts = {}
             processed_chunks = set()
             active_futures = {}
 
@@ -247,16 +274,15 @@ def process_meeting(file: UploadFile = File(...), meeting_type: str = Form("Gene
                 for attempt in range(max_retries):
                     try:
                         text = ts.transcribe_audio_file(chunk_path)
-                        if os.path.exists(chunk_path): 
+                        if os.path.exists(chunk_path):
                             os.remove(chunk_path)
                         return idx, text
-                    except Exception as e:
+                    except Exception:
                         if attempt < max_retries - 1:
-                            print(f"Network drop on chunk {idx}. Retrying in {backoff_time}s... (Attempt {attempt + 1}/{max_retries})")
                             time.sleep(backoff_time)
                             backoff_time *= 2
                         else:
-                            if os.path.exists(chunk_path): 
+                            if os.path.exists(chunk_path):
                                 os.remove(chunk_path)
                             return idx, "\n[Transcription missing for this part due to extreme network failure]\n"
 
@@ -266,20 +292,20 @@ def process_meeting(file: UploadFile = File(...), meeting_type: str = Form("Gene
                     progress_tracker[filename]["total"] = max(1, len(current_chunks))
 
                     safe_chunks = current_chunks[:-1] if len(current_chunks) > 0 else []
-                    
+
                     for chunk_path in safe_chunks:
                         if chunk_path not in processed_chunks:
                             idx = int(os.path.basename(chunk_path).split('_')[1].split('.')[0])
                             future = executor.submit(process_single_chunk, idx, chunk_path)
                             active_futures[future] = idx
                             processed_chunks.add(chunk_path)
-                    
+
                     progress_tracker[filename]["current"] = sum(1 for f in active_futures.keys() if f.done())
                     time.sleep(0.5)
 
                 current_chunks = sorted(glob.glob(os.path.join(chunk_dir, f"chunk_*{file_ext}")))
                 progress_tracker[filename]["total"] = max(1, len(current_chunks))
-                
+
                 for chunk_path in current_chunks:
                     if chunk_path not in processed_chunks:
                         idx = int(os.path.basename(chunk_path).split('_')[1].split('.')[0])
@@ -289,13 +315,13 @@ def process_meeting(file: UploadFile = File(...), meeting_type: str = Form("Gene
 
                 for future in as_completed(active_futures.keys()):
                     idx, text = future.result()
-                    if text: 
+                    if text:
                         transcript_parts[idx] = text
                     progress_tracker[filename]["current"] = sum(1 for f in active_futures.keys() if f.done())
-                        
+
             final_text = "\n\n".join(transcript_parts[i].strip() for i in sorted(transcript_parts.keys()) if transcript_parts[i].strip())
             progress_tracker.pop(filename, None)
-            
+
             if tmp_path and os.path.exists(tmp_path):
                 os.remove(tmp_path)
             if os.path.exists(chunk_dir):
@@ -319,10 +345,6 @@ def process_meeting(file: UploadFile = File(...), meeting_type: str = Form("Gene
         if tmp_path and os.path.exists(tmp_path):
             os.remove(tmp_path)
         return {"status": "error", "message": str(e)}
-
-# Live transcription now runs in the browser via the Azure Speech SDK; the final
-# diarized pass is handled by POST /diarize/stream (see thick_client.py). The old
-# server-side WebSocket pipeline has been retired.
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

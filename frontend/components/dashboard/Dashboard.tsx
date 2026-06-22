@@ -7,6 +7,14 @@ import MyMeetings from "@/components/MyMeetings";
 import Sidebar, { type DashboardView } from "./Sidebar";
 import CaptureControls from "./CaptureControls";
 import TranscriptArea, { type Segment } from "./TranscriptArea";
+import {
+  loadMeetings,
+  addMeeting,
+  clearMeetings,
+  MEETINGS_EVENT,
+} from "@/lib/meetingStore";
+import { getUserName, clearSession } from "@/lib/auth";
+import ConfirmModal from "@/components/ui/ConfirmModal";
 
 export type CaptureTab = "live" | "upload";
 
@@ -20,8 +28,6 @@ function formatTime(totalSeconds: number) {
   return [h, m, s].map((n) => String(n).padStart(2, "0")).join(":");
 }
 
-// Soft ambient glow — a faint blue (top-left) + violet (bottom-right) radial
-// wash on the slate-50 base. Premium and quiet; no busy pattern.
 function AmbientGlow() {
   return (
     <div
@@ -42,12 +48,10 @@ export default function Dashboard() {
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [meetingsCount, setMeetingsCount] = useState(0);
 
-  // Upload tab
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
 
-  // Live transcript
   const [lines, setLines] = useState<string[]>([]);
   const [interim, setInterim] = useState("");
   const transcriptText = useMemo(
@@ -55,34 +59,29 @@ export default function Dashboard() {
     [lines, interim],
   );
 
-  // Final diarized playback
   const [segments, setSegments] = useState<Segment[]>([]);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [showPlayback, setShowPlayback] = useState(false);
 
-  // Modals
   const [showFinishModal, setShowFinishModal] = useState(false);
   const [showNewConvoModal, setShowNewConvoModal] = useState(false);
   const [showLogoutModal, setShowLogoutModal] = useState(false);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [userName, setUserName] = useState<string | null>(null);
+
+  useEffect(() => {
+    setUserName(getUserName());
+  }, []);
 
   const startedAtRef = useRef<number>(0);
-  // Bumped on every Start / New Conversation. Async results (diarization,
-  // upload) captured under an old id are silently ignored — fixes the state
-  // bleed where a late promise dumps the previous transcript into a fresh session.
   const sessionIdRef = useRef(0);
-  // Belt-and-suspenders gate: only true while a session is actively accepting
-  // live recognition events. Stray onPartial/onFinal after stop/reset are dropped.
   const liveRef = useRef(false);
-  // rAF-coalesced interim buffer (see handleAzurePartial).
   const interimRef = useRef("");
   const interimRafRef = useRef<number | null>(null);
 
-  // Coalesce high-frequency interim updates into ONE setState per animation
-  // frame. A burst of Azure `recognizing` events between frames collapses to a
-  // single render, so churn is capped at the display refresh rate regardless of
-  // how fast Azure emits or how long the transcript grows.
   const handleAzurePartial = useCallback((text: string) => {
-    if (!liveRef.current) return; // ignore events outside the live session
+    if (!liveRef.current) return;
     interimRef.current = text;
     if (interimRafRef.current == null) {
       interimRafRef.current = requestAnimationFrame(() => {
@@ -113,7 +112,6 @@ export default function Dashboard() {
     onError: handleAzureError,
   });
 
-  // Cancel any pending interim flush on unmount.
   useEffect(() => {
     return () => {
       if (interimRafRef.current != null) {
@@ -122,7 +120,6 @@ export default function Dashboard() {
     };
   }, []);
 
-  // Stop accepting live events and drop any buffered interim text.
   const stopLiveEvents = useCallback(() => {
     liveRef.current = false;
     if (interimRafRef.current != null) {
@@ -136,7 +133,6 @@ export default function Dashboard() {
     statusMessage ??
     (isPaused ? "Paused" : isRecording ? "Listening..." : "Ready");
 
-  // Real recording duration — frozen while paused.
   useEffect(() => {
     if (!isRecording || isPaused) return;
     const id = setInterval(() => {
@@ -146,19 +142,10 @@ export default function Dashboard() {
   }, [isRecording, isPaused]);
 
   useEffect(() => {
-    const read = () => {
-      try {
-        const stored = JSON.parse(
-          localStorage.getItem("threadnotes_local_history") || "[]",
-        );
-        setMeetingsCount(Array.isArray(stored) ? stored.length : 0);
-      } catch {
-        setMeetingsCount(0);
-      }
-    };
+    const read = () => setMeetingsCount(loadMeetings().length);
     read();
-    window.addEventListener("meetingSavedLocally", read);
-    return () => window.removeEventListener("meetingSavedLocally", read);
+    window.addEventListener(MEETINGS_EVENT, read);
+    return () => window.removeEventListener(MEETINGS_EVENT, read);
   }, [view]);
 
   const clearPlayback = useCallback(() => {
@@ -170,9 +157,8 @@ export default function Dashboard() {
     });
   }, []);
 
-  // ---- Live recording ----
   const handleStart = useCallback(async () => {
-    sessionIdRef.current += 1; // new session
+    sessionIdRef.current += 1;
     clearPlayback();
     setLines([]);
     setInterim("");
@@ -181,7 +167,7 @@ export default function Dashboard() {
     const ok = await start();
     if (ok) {
       startedAtRef.current = Date.now();
-      liveRef.current = true; // begin accepting live events
+      liveRef.current = true;
       setIsRecording(true);
       setIsPaused(false);
       setStatusMessage("Listening...");
@@ -203,17 +189,15 @@ export default function Dashboard() {
     setStatusMessage("Listening...");
   }, [resume, sessionTime]);
 
-  // Confirmed via the Finish modal -> diarization + playback.
   const confirmFinish = useCallback(async () => {
     const sid = sessionIdRef.current;
-    stopLiveEvents(); // no more live events; we're finalizing
+    stopLiveEvents();
     setShowFinishModal(false);
     setIsRecording(false);
     setIsPaused(false);
     setStatusMessage("Finalizing & diarizing...");
     try {
       const result = await finishAndUpload();
-      // Ignore if a New Conversation started a new session while we awaited.
       if (sid !== sessionIdRef.current) return;
       if (result?.audioUrl) {
         setAudioUrl((prev) => {
@@ -240,7 +224,6 @@ export default function Dashboard() {
     }
   }, [finishAndUpload, stopLiveEvents]);
 
-  // ---- Upload ----
   const handleProcessUpload = useCallback(async () => {
     if (!uploadFile) return;
     const sid = sessionIdRef.current;
@@ -259,9 +242,7 @@ export default function Dashboard() {
         if (data.total > 0) {
           setUploadProgress(Math.round((data.current / data.total) * 95));
         }
-      } catch {
-        /* best-effort */
-      }
+      } catch {}
     }, 2000);
 
     const form = new FormData();
@@ -275,7 +256,7 @@ export default function Dashboard() {
       });
       const data = await res.json();
       clearInterval(progressInterval);
-      if (sid !== sessionIdRef.current) return; // session changed mid-upload
+      if (sid !== sessionIdRef.current) return;
       setUploadProgress(100);
       setTimeout(() => {
         if (sid !== sessionIdRef.current) return;
@@ -298,7 +279,6 @@ export default function Dashboard() {
     }
   }, [uploadFile, clearPlayback]);
 
-  // ---- Save: text file (IPC/Blob) + persist to MyMeetings history ----
   const handleSaveTranscript = useCallback(async () => {
     if (!transcriptText.trim() && segments.length === 0) return;
     const defaultName = `ThreadNotes_Transcript_${new Date().toISOString().slice(0, 10)}.txt`;
@@ -323,7 +303,6 @@ export default function Dashboard() {
         URL.revokeObjectURL(url);
       }
 
-      // Persist to MyMeetings (drives the sidebar badge + history page).
       const entries =
         segments.length > 0
           ? segments.map((s) => ({
@@ -340,24 +319,15 @@ export default function Dashboard() {
         date: new Date().toISOString(),
         transcript: entries,
       };
-      const history = JSON.parse(
-        localStorage.getItem("threadnotes_local_history") || "[]",
-      );
-      localStorage.setItem(
-        "threadnotes_local_history",
-        JSON.stringify([record, ...history]),
-      );
-      window.dispatchEvent(new Event("meetingSavedLocally"));
+      addMeeting(record);
       setStatusMessage("✅ Saved!");
-    } catch (e) {
-      console.error("Save failed", e);
+    } catch {
       setStatusMessage("⚠️ Save failed");
     }
   }, [transcriptText, segments, lines]);
 
-  // ---- Reset / New conversation ----
   const doReset = useCallback(() => {
-    sessionIdRef.current += 1; // invalidate any in-flight diarization/upload
+    sessionIdRef.current += 1;
     stopLiveEvents();
     if (isRecording) cancel();
     clearPlayback();
@@ -383,13 +353,34 @@ export default function Dashboard() {
   const handleLogout = useCallback(() => {
     stopLiveEvents();
     if (isRecording) cancel();
-    localStorage.removeItem("token");
-    localStorage.removeItem("userName");
+    clearSession();
     router.push("/auth");
   }, [isRecording, cancel, router, stopLiveEvents]);
 
-  // Manual transcript correction — collapses to plain text (drops word timings
-  // since the edit invalidates them) while keeping the audio for review.
+  const handleDeleteAccount = useCallback(async () => {
+    setDeleting(true);
+    try {
+      const token = localStorage.getItem("token");
+      const res = await fetch(`${API_URL}/delete-account`, {
+        method: "DELETE",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.detail || "Failed to delete account");
+      }
+      stopLiveEvents();
+      if (isRecording) cancel();
+      clearMeetings();
+      clearSession();
+      router.replace("/auth");
+    } catch (e: any) {
+      setDeleting(false);
+      setShowDeleteModal(false);
+      setStatusMessage(`⚠️ ${e?.message || "Delete failed"}`);
+    }
+  }, [isRecording, cancel, router, stopLiveEvents]);
+
   const handleTranscriptEdit = useCallback((text: string) => {
     setLines(text ? [text] : []);
     setInterim("");
@@ -403,8 +394,9 @@ export default function Dashboard() {
         activeView={view}
         onNavigate={setView}
         meetingsCount={meetingsCount}
-        userName="Shaurya"
+        userName={userName}
         onLogout={() => setShowLogoutModal(true)}
+        onDeleteAccount={() => setShowDeleteModal(true)}
       />
 
       <main className="relative flex flex-1 flex-col overflow-hidden">
@@ -412,7 +404,6 @@ export default function Dashboard() {
 
         {view === "dashboard" ? (
           <div className="relative z-10 flex h-full min-h-0 flex-col gap-4 px-3 py-4">
-            {/* Top bar: heading + New Conversation button (nudged down from the top edge) */}
             <div className="mt-4 flex shrink-0 flex-wrap items-end justify-between gap-4">
               <div>
                 <h2 className="text-2xl font-bold tracking-tight text-slate-900">
@@ -472,8 +463,6 @@ export default function Dashboard() {
         )}
       </main>
 
-      {/* Floating mini-player — visible when a session is live but you've
-          navigated away from the dashboard (e.g. browsing MyMeetings). */}
       {isRecording && view !== "dashboard" && (
         <div className="fixed bottom-6 right-6 z-150 w-70 rounded-2xl border border-white/60 bg-white/80 p-4 shadow-[0_20px_40px_-15px_rgba(0,0,0,0.18)] backdrop-blur-2xl">
           <div className="flex items-center justify-between">
@@ -515,7 +504,6 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Finish-recording confirmation */}
       {showFinishModal && (
         <div className="fixed inset-0 z-100 flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-sm">
           <div className="w-full max-w-sm rounded-3xl border border-white/60 bg-white p-7 shadow-2xl">
@@ -542,7 +530,6 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* New-conversation confirmation */}
       {showNewConvoModal && (
         <div className="fixed inset-0 z-100 flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-sm">
           <div className="w-full max-w-sm rounded-3xl border border-white/60 bg-white p-7 shadow-2xl">
@@ -573,7 +560,6 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Log-out confirmation */}
       {showLogoutModal && (
         <div className="fixed inset-0 z-100 flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-sm">
           <div className="w-full max-w-sm rounded-3xl border border-white/60 bg-white p-7 shadow-2xl">
@@ -602,6 +588,18 @@ export default function Dashboard() {
           </div>
         </div>
       )}
+
+      <ConfirmModal
+        open={showDeleteModal}
+        danger
+        loading={deleting}
+        title="Delete account?"
+        message="Are you sure you want to permanently delete your account? This action cannot be undone."
+        confirmLabel="Delete"
+        cancelLabel="Cancel"
+        onConfirm={handleDeleteAccount}
+        onCancel={() => setShowDeleteModal(false)}
+      />
     </div>
   );
 }

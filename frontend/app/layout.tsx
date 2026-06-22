@@ -3,8 +3,6 @@ import { Sora } from "next/font/google";
 import "./globals.css";
 import AuthInterceptor from "@/components/AuthInterceptor";
 
-// Self-hosted by next/font (no external request, preloaded, fallback-metric
-// adjusted) — eliminates the FOUT the old Google Fonts <link> caused.
 const sora = Sora({
   subsets: ["latin"],
   weight: ["300", "400", "500", "600", "700"],
@@ -33,7 +31,6 @@ export default function RootLayout({
     <html lang="en" className={sora.variable}>
       <body className="m-0 overflow-hidden bg-[var(--bg-primary)] p-0 font-sans antialiased text-[var(--text-primary)]">
         <div className="h-[100dvh] w-full">
-          {/* 👈 ProtectedRoute removed from RootLayout. It should only wrap specific pages. */}
           <AuthInterceptor />
           {children}
         </div>

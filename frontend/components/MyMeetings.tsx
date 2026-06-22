@@ -1,8 +1,9 @@
 "use client";
-import React, { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import Calendar from "react-calendar";
 import "react-calendar/dist/Calendar.css";
-import { useRouter } from "next/navigation";
+import { Share2 } from "lucide-react";
+import { loadMeetings, saveMeetings, MEETINGS_EVENT } from "@/lib/meetingStore";
 
 type TranscriptEntry = { speaker: string; text: string; timestamp: string };
 type Meeting = {
@@ -29,28 +30,67 @@ export default function MyMeetings() {
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
 
   const [meetingToDelete, setMeetingToDelete] = useState<string | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
 
   const searchInputRef = useRef<HTMLInputElement>(null);
-  const router = useRouter();
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const loadLocalMeetings = () => {
+  const showToast = (message: string) => {
+    setToast(message);
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(null), 2500);
+  };
+
+  const copyToClipboard = async (text: string): Promise<boolean> => {
     try {
-      const stored = localStorage.getItem("threadnotes_local_history");
-      if (stored) {
-        setMeetings(JSON.parse(stored));
-      } else {
-        setMeetings([]);
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+        return true;
       }
-    } catch (e) {
-      console.error("Failed to parse local history");
+    } catch {}
+    try {
+      const textarea = document.createElement("textarea");
+      textarea.value = text;
+      textarea.style.position = "fixed";
+      textarea.style.opacity = "0";
+      document.body.appendChild(textarea);
+      textarea.focus();
+      textarea.select();
+      const ok = document.execCommand("copy");
+      document.body.removeChild(textarea);
+      return ok;
+    } catch {
+      return false;
     }
   };
+
+  const handleShare = async (meeting: Meeting) => {
+    const formattedDate = new Date(meeting.date).toLocaleString();
+    const body = meeting.transcript
+      .map((t) => `${t.speaker}: ${t.text}`)
+      .join("\n\n");
+    const shareText = `${meeting.topic}\n${formattedDate}\n\n${body}`;
+
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: meeting.topic, text: shareText });
+        return;
+      } catch (err) {
+        if ((err as DOMException)?.name === "AbortError") return;
+      }
+    }
+
+    const copied = await copyToClipboard(shareText);
+    showToast(copied ? "Copied to clipboard" : "Could not copy transcript");
+  };
+
+  const loadLocalMeetings = () => setMeetings(loadMeetings());
 
   useEffect(() => {
     loadLocalMeetings();
 
     const handleInstantRefresh = () => loadLocalMeetings();
-    window.addEventListener("meetingSavedLocally", handleInstantRefresh);
+    window.addEventListener(MEETINGS_EVENT, handleInstantRefresh);
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (
@@ -66,7 +106,7 @@ export default function MyMeetings() {
     document.addEventListener("keydown", handleKeyDown);
 
     return () => {
-      window.removeEventListener("meetingSavedLocally", handleInstantRefresh);
+      window.removeEventListener(MEETINGS_EVENT, handleInstantRefresh);
       document.removeEventListener("keydown", handleKeyDown);
     };
   }, [selectedMeeting]);
@@ -103,7 +143,7 @@ export default function MyMeetings() {
     if (!meetingToDelete) return;
     const updated = meetings.filter((m) => m.id !== meetingToDelete);
     setMeetings(updated);
-    localStorage.setItem("threadnotes_local_history", JSON.stringify(updated));
+    saveMeetings(updated);
     setMeetingToDelete(null);
   };
 
@@ -329,24 +369,36 @@ export default function MyMeetings() {
               <h2 className="text-xl font-bold text-white">
                 {selectedMeeting.topic}
               </h2>
-              <button
-                onClick={() => setSelectedMeeting(null)}
-                className="p-2 text-white/80 hover:bg-white/20 hover:text-white rounded-full transition-colors"
-              >
-                <svg
-                  className="w-5 h-5"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => handleShare(selectedMeeting)}
+                  className="p-2 text-white/80 hover:bg-white/20 hover:text-white rounded-full transition-colors"
+                  title="Share transcript"
+                  aria-label="Share transcript"
                 >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M6 18L18 6M6 6l12 12"
-                  />
-                </svg>
-              </button>
+                  <Share2 className="w-5 h-5" />
+                </button>
+                <button
+                  onClick={() => setSelectedMeeting(null)}
+                  className="p-2 text-white/80 hover:bg-white/20 hover:text-white rounded-full transition-colors"
+                  title="Close"
+                  aria-label="Close"
+                >
+                  <svg
+                    className="w-5 h-5"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M6 18L18 6M6 6l12 12"
+                    />
+                  </svg>
+                </button>
+              </div>
             </div>
             <div className="p-6 overflow-y-auto space-y-4 text-[15px] text-slate-700 custom-scrollbar">
               {selectedMeeting.transcript.map((t, idx) => (
@@ -364,6 +416,12 @@ export default function MyMeetings() {
               ))}
             </div>
           </div>
+        </div>
+      )}
+
+      {toast && (
+        <div className="fixed bottom-6 left-1/2 z-110 -translate-x-1/2 rounded-xl bg-slate-900 px-5 py-3 text-sm font-semibold text-white shadow-2xl animate-in fade-in slide-in-from-bottom-2 duration-200">
+          {toast}
         </div>
       )}
     </div>

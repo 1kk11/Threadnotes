@@ -1,6 +1,6 @@
 "use client";
 import { useRef, useState } from "react";
-import { Radio, Upload, Mic, Square, Pause, Play, FileAudio } from "lucide-react";
+import { Radio, Upload, Mic, Square, Pause, Play, FileAudio, Globe } from "lucide-react";
 import type { CaptureTab } from "./Dashboard";
 import SiriWave from "./SiriWave";
 
@@ -12,9 +12,9 @@ function formatTime(totalSeconds: number) {
 }
 
 type CaptureControlsProps = {
-  isRecording: boolean; // a session is active (recording OR paused)
+  isRecording: boolean;
   isPaused: boolean;
-  sessionTime: number; // seconds
+  sessionTime: number;
   activeTab: CaptureTab;
   systemStatus: string;
   onStart: () => void;
@@ -23,7 +23,6 @@ type CaptureControlsProps = {
   onStop: () => void;
   onTabChange: (tab: CaptureTab) => void;
 
-  // Upload tab
   uploadFile: File | null;
   isUploading: boolean;
   uploadProgress: number;
@@ -53,11 +52,10 @@ export default function CaptureControls({
 }: CaptureControlsProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
-  const isActive = isRecording && !isPaused; // visually "live"
+  const isActive = isRecording && !isPaused;
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col gap-2">
-      {/* System Status */}
       <div className={`${cardClass} px-5 py-4`}>
         <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
           System Status
@@ -71,7 +69,6 @@ export default function CaptureControls({
         </p>
       </div>
 
-      {/* Segmented control */}
       <div className="flex rounded-xl border border-white/60 bg-white/40 p-1 backdrop-blur-md">
         {(
           [
@@ -98,60 +95,89 @@ export default function CaptureControls({
         })}
       </div>
 
-      {/* Body card — switches between live recording and file upload */}
       <div className={`${cardClass} flex flex-1 flex-col items-center justify-between gap-6 p-6`}>
         {activeTab === "live" ? (
           <>
-            {/* Polar particle-ring visualizer (transparent) wrapping the live
-                timer. Freezes when recording stops/pauses (gated in SiriWave). */}
-            <div className="relative my-2 h-80 w-80 shrink-0">
-              <SiriWave isRecording={isRecording} isPaused={isPaused} />
-              <div className="pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-center">
-                <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
-                  Session Time
+            <div className="flex w-full flex-col items-center gap-4">
+              <div className="relative my-2 h-80 w-80 shrink-0">
+                <SiriWave isRecording={isRecording} isPaused={isPaused} />
+                <div className="pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-center">
+                  <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
+                    Session Time
+                  </span>
+                  <span className="font-mono text-2xl font-black tracking-tight text-slate-800 tabular-nums">
+                    {formatTime(sessionTime)}
+                  </span>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3 rounded-full border border-white/60 bg-white/50 px-4 py-2 text-xs font-semibold text-slate-500 backdrop-blur-md">
+                <span className="flex items-center gap-1.5">
+                  <Mic className="h-3.5 w-3.5 text-violet-500" /> Default Microphone
                 </span>
-                <span className="font-mono text-2xl font-black tracking-tight text-slate-800 tabular-nums">
-                  {formatTime(sessionTime)}
+                <span className="h-3 w-px bg-slate-300" />
+                <span className="flex items-center gap-1.5">
+                  <Globe className="h-3.5 w-3.5 text-blue-500" /> Auto-detect English
                 </span>
               </div>
             </div>
 
-            {/* Controls: Start  |  Pause/Resume + Stop */}
-            {!isRecording ? (
-              <button
-                onClick={onStart}
-                className="flex w-full items-center justify-center gap-2 rounded-xl bg-linear-to-r from-violet-500 to-blue-500 py-4 text-sm font-bold text-white shadow-lg shadow-violet-500/25 transition-all hover:from-violet-600 hover:to-blue-600 active:scale-[0.99]"
-              >
-                <Mic className="h-4 w-4" /> Start Recording
-              </button>
-            ) : (
-              <div className="flex w-full gap-3">
-                {isPaused ? (
-                  <button
-                    onClick={onResume}
-                    className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-linear-to-r from-violet-500 to-blue-500 py-4 text-sm font-bold text-white shadow-lg shadow-violet-500/25 transition-all hover:from-violet-600 hover:to-blue-600 active:scale-[0.99]"
-                  >
-                    <Play className="h-4 w-4 fill-current" /> Resume
-                  </button>
+            <div className="flex w-full flex-col items-center gap-4">
+              <div className="flex h-5 items-center justify-center">
+                {isActive ? (
+                  <div className="flex items-end gap-1">
+                    {[0.45, 0.75, 1, 0.6, 0.85, 0.5].map((h, i) => (
+                      <span
+                        key={i}
+                        className="w-1 animate-pulse rounded-full bg-linear-to-t from-violet-500 to-blue-500"
+                        style={{ height: `${h * 20}px`, animationDelay: `${i * 120}ms` }}
+                      />
+                    ))}
+                  </div>
                 ) : (
-                  <button
-                    onClick={onPause}
-                    className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-linear-to-r from-amber-400 to-amber-500 py-4 text-sm font-bold text-white shadow-lg shadow-amber-500/25 transition-all hover:from-amber-500 hover:to-amber-600 active:scale-[0.99]"
-                  >
-                    <Pause className="h-4 w-4 fill-current" /> Pause
-                  </button>
+                  <p className="text-xs font-medium text-slate-400">
+                    {isPaused
+                      ? "Paused — resume when you're ready"
+                      : "Ready to capture meeting insights…"}
+                  </p>
                 )}
-                <button
-                  onClick={onStop}
-                  className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-linear-to-r from-rose-500 to-red-500 py-4 text-sm font-bold text-white shadow-lg shadow-red-500/25 transition-all hover:from-rose-600 hover:to-red-600 active:scale-[0.99]"
-                >
-                  <Square className="h-4 w-4 fill-current" /> Stop
-                </button>
               </div>
-            )}
+
+              {!isRecording ? (
+                <button
+                  onClick={onStart}
+                  className="flex w-full items-center justify-center gap-2 rounded-xl bg-linear-to-r from-violet-500 to-blue-500 py-4 text-sm font-bold text-white shadow-lg shadow-violet-500/25 transition-all hover:from-violet-600 hover:to-blue-600 active:scale-[0.99]"
+                >
+                  <Mic className="h-4 w-4" /> Start Recording
+                </button>
+              ) : (
+                <div className="flex w-full gap-3">
+                  {isPaused ? (
+                    <button
+                      onClick={onResume}
+                      className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-linear-to-r from-violet-500 to-blue-500 py-4 text-sm font-bold text-white shadow-lg shadow-violet-500/25 transition-all hover:from-violet-600 hover:to-blue-600 active:scale-[0.99]"
+                    >
+                      <Play className="h-4 w-4 fill-current" /> Resume
+                    </button>
+                  ) : (
+                    <button
+                      onClick={onPause}
+                      className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-linear-to-r from-amber-400 to-amber-500 py-4 text-sm font-bold text-white shadow-lg shadow-amber-500/25 transition-all hover:from-amber-500 hover:to-amber-600 active:scale-[0.99]"
+                    >
+                      <Pause className="h-4 w-4 fill-current" /> Pause
+                    </button>
+                  )}
+                  <button
+                    onClick={onStop}
+                    className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-linear-to-r from-rose-500 to-red-500 py-4 text-sm font-bold text-white shadow-lg shadow-red-500/25 transition-all hover:from-rose-600 hover:to-red-600 active:scale-[0.99]"
+                  >
+                    <Square className="h-4 w-4 fill-current" /> Stop
+                  </button>
+                </div>
+              )}
+            </div>
           </>
         ) : (
-          /* ---- Upload File tab ---- */
           <>
             <div
               onClick={() => fileInputRef.current?.click()}

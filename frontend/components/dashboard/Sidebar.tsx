@@ -1,4 +1,10 @@
-import { FileText, LayoutDashboard, CalendarDays, LogOut } from "lucide-react";
+import {
+  FileText,
+  LayoutDashboard,
+  CalendarDays,
+  LogOut,
+  Trash2,
+} from "lucide-react";
 
 export type DashboardView = "dashboard" | "meetings";
 
@@ -6,16 +12,18 @@ type SidebarProps = {
   activeView: DashboardView;
   onNavigate: (view: DashboardView) => void;
   meetingsCount?: number;
-  userName?: string;
+  userName?: string | null;
   onLogout?: () => void;
+  onDeleteAccount?: () => void;
 };
 
 export default function Sidebar({
   activeView,
   onNavigate,
   meetingsCount = 0,
-  userName = "Shaurya",
+  userName,
   onLogout,
+  onDeleteAccount,
 }: SidebarProps) {
   const navBase =
     "flex items-center gap-3 rounded-xl px-3.5 py-2.5 text-sm transition-colors";
@@ -24,7 +32,6 @@ export default function Sidebar({
 
   return (
     <aside className="flex w-64 shrink-0 flex-col border-r border-white/60 bg-white/50 backdrop-blur-xl">
-      {/* Logo */}
       <div className="flex items-center gap-2.5 px-5 py-5">
         <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-linear-to-br from-violet-500 to-blue-500 shadow-md shadow-violet-500/30">
           <FileText className="h-5 w-5 text-white" strokeWidth={2.2} />
@@ -34,7 +41,6 @@ export default function Sidebar({
         </span>
       </div>
 
-      {/* Navigation */}
       <nav className="flex flex-col gap-1 px-3 py-2">
         <button
           onClick={() => onNavigate("dashboard")}
@@ -64,17 +70,24 @@ export default function Sidebar({
         </button>
       </nav>
 
-      {/* Bottom user status */}
       <div className="mt-auto border-t border-white/60 px-4 py-4">
         <div className="flex items-center gap-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-full bg-linear-to-br from-slate-300 to-slate-400 text-xs font-bold text-white">
-            {userName.charAt(0).toUpperCase()}
-          </div>
+          {userName ? (
+            <div className="flex h-9 w-9 items-center justify-center rounded-full bg-linear-to-br from-slate-300 to-slate-400 text-xs font-bold text-white">
+              {userName.charAt(0).toUpperCase()}
+            </div>
+          ) : (
+            <div className="h-9 w-9 animate-pulse rounded-full bg-slate-200" />
+          )}
           <div className="flex flex-1 flex-col">
-            <span className="text-sm font-semibold text-slate-800">
-              {userName}
-            </span>
-            <span className="flex items-center gap-1.5 text-[11px] font-medium text-emerald-600">
+            {userName ? (
+              <span className="text-sm font-semibold text-slate-800">
+                {userName}
+              </span>
+            ) : (
+              <span className="h-3.5 w-24 animate-pulse rounded bg-slate-200" />
+            )}
+            <span className="mt-1 flex items-center gap-1.5 text-[11px] font-medium text-emerald-600">
               <span className="h-2 w-2 rounded-full bg-emerald-500 shadow-[0_0_6px] shadow-emerald-400" />
               Live
             </span>
@@ -87,6 +100,14 @@ export default function Sidebar({
         >
           <LogOut className="h-4.5 w-4.5" />
           Log out
+        </button>
+
+        <button
+          onClick={onDeleteAccount}
+          className="mt-1 flex w-full items-center gap-2 rounded-lg px-2 py-2 text-sm font-medium text-red-500 transition-colors hover:bg-red-50 hover:text-red-600"
+        >
+          <Trash2 className="h-4.5 w-4.5" />
+          Delete Account
         </button>
       </div>
     </aside>

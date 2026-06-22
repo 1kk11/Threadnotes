@@ -2,15 +2,16 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Dashboard from "@/components/dashboard/Dashboard";
+import { getValidToken, clearSession } from "@/lib/auth";
 
 export default function Home() {
   const router = useRouter();
   const [isAuthorized, setIsAuthorized] = useState(false);
 
   useEffect(() => {
-    const token = localStorage.getItem("token");
-    if (!token) {
-      router.push("/auth");
+    if (!getValidToken()) {
+      clearSession();
+      router.replace("/auth");
     } else {
       setIsAuthorized(true);
     }

@@ -16,14 +16,13 @@ type TranscriptAreaProps = {
   segments?: Segment[];
   audioUrl?: string | null;
   showPlayback?: boolean;
-  editable?: boolean; // hide Edit while a recording is live
+  editable?: boolean;
   onSave?: () => void;
   onTranscriptEdit?: (text: string) => void;
 };
 
 const stripSpeakerPrefix = (text: string) => text.replace(/^\[.*?\]\s*/, "");
 
-// Distinct, consistent name color per speaker (assigned in first-seen order).
 const SPEAKER_PALETTE = [
   "text-indigo-600",
   "text-orange-500",
@@ -46,17 +45,15 @@ export default function TranscriptArea({
   const [editMode, setEditMode] = useState(false);
   const [draft, setDraft] = useState("");
 
-  // Auto-scroll: keep the newest transcript in view as it grows.
   const endRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (editMode) return; // don't yank the view while the user is editing
+    if (editMode) return;
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [transcriptText, segments, editMode]);
 
   const hasContent = transcriptText.trim().length > 0 || segments.length > 0;
   const inPlayback = showPlayback && segments.length > 0 && !editMode;
 
-  // The flat text used both for the plain view and as the edit buffer source.
   const fullText =
     segments.length > 0
       ? segments
@@ -64,7 +61,6 @@ export default function TranscriptArea({
           .join("\n\n")
       : transcriptText;
 
-  // Map each unique speaker to a consistent color (first-seen order).
   const speakerColors: Record<string, string> = {};
   segments.forEach((s) => {
     if (!(s.speaker in speakerColors)) {
@@ -87,8 +83,6 @@ export default function TranscriptArea({
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-white/60 bg-white/60 shadow-[0_8px_30px_rgb(0,0,0,0.06)] backdrop-blur-xl">
-      {/* Header row — logo gradient, white text (top corners stay rounded via
-          the card's overflow-hidden rounded-2xl). */}
       <div className="flex items-center justify-between bg-linear-to-r from-violet-500 to-blue-500 px-6 py-4">
         <h3 className="text-base font-bold text-white">
           {inPlayback ? "Playback & Transcript" : "Conversation Transcript"}
@@ -121,7 +115,6 @@ export default function TranscriptArea({
         </div>
       </div>
 
-      {/* Audio player — stays available in playback (hidden while editing). */}
       {audioUrl && !editMode && (
         <div className="shrink-0 border-b border-white/60 bg-white/40 px-6 py-4">
           <audio
@@ -137,7 +130,6 @@ export default function TranscriptArea({
         </div>
       )}
 
-      {/* Body — constrained to the card; scrolls internally instead of growing. */}
       <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto p-6">
         {editMode ? (
           <textarea
@@ -160,7 +152,6 @@ export default function TranscriptArea({
                 key={i}
                 className="border-b border-gray-100 pb-4 last:border-b-0"
               >
-                {/* Colored speaker name above the spoken text (no avatar/timestamp) */}
                 <p
                   className={`mb-1 text-sm font-bold ${
                     speakerColors[seg.speaker] || "text-slate-700"
@@ -192,7 +183,6 @@ export default function TranscriptArea({
             {transcriptText}
           </p>
         )}
-        {/* Auto-scroll anchor — kept in view as the transcript grows. */}
         <div ref={endRef} />
       </div>
     </div>
