@@ -15,7 +15,6 @@ import shutil
 import time
 import subprocess
 import glob
-import httpx
 from datetime import datetime, timezone, timedelta
 from azure.cosmos import CosmosClient
 from dotenv import load_dotenv
@@ -67,52 +66,26 @@ class ResetPasswordRequest(BaseModel):
     new_password: str
 
 def send_otp_email(target_email: str, otp: str, subject_prefix: str):
-    # Delivery via the Resend HTTP API (https) — works on hosts like Render that
-    # block outbound SMTP (port 587). No SMTP, no blocked ports.
-    api_key = os.getenv("RESEND_API_KEY")
-    # `from` must be a Resend-verified sender. Use your verified domain address,
-    # or "onboarding@resend.dev" for testing (only delivers to your own account).
-    sender_email = os.getenv("EMAIL_SENDER", "onboarding@resend.dev")
-
-    print(
-        f"[email] target={target_email} | api_key_set={bool(api_key)} | from={sender_email}"
-    )
-
-    if not api_key:
-        print("[email] ABORT — RESEND_API_KEY missing from environment")
-        raise HTTPException(status_code=500, detail="Email configuration missing in backend")
-
-    payload = {
-        "from": sender_email,
-        "to": [target_email],
-        "subject": f"ThreadNotes - {subject_prefix} OTP",
-        "text": f"Your OTP for {subject_prefix} is: {otp}\n\nPlease do not share this with anyone.",
-    }
+    # Delivery via the Gmail API (HTTPS) — works on hosts like Render that block
+    # outbound SMTP (port 587). Reuses the same OAuth credentials as send-notes.
+    subject = f"ThreadNotes — {subject_prefix} OTP"
+    html_content = f"""\
+<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;max-width:480px;margin:0 auto;padding:24px;color:#0f172a">
+  <h2 style="margin:0 0 8px">ThreadNotes</h2>
+  <p style="margin:0 0 16px;color:#475569">Your OTP for <strong>{subject_prefix}</strong> is:</p>
+  <div style="font-size:32px;font-weight:700;letter-spacing:8px;padding:16px 0;text-align:center;background:#f1f5f9;border-radius:12px;color:#4f46e5">{otp}</div>
+  <p style="margin:16px 0 0;font-size:13px;color:#94a3b8">This code expires shortly. Please do not share it with anyone.</p>
+</div>"""
 
     try:
-        resp = httpx.post(
-            "https://api.resend.com/emails",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-            timeout=20,
-        )
+        # Imported lazily so a missing Gmail token can't crash app import.
+        from email_service import _send_sync
+        result = _send_sync(target_email, subject, html_content)
     except Exception as e:
-        print(f"[email] HTTP request failed ({type(e).__name__}): {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to send email: {e}")
+        print(f"[email] OTP send failed for {target_email} ({type(e).__name__}): {e}")
+        raise HTTPException(status_code=500, detail="Failed to send verification email.")
 
-    if resp.status_code >= 400:
-        # Resend returns a JSON error body — surface it to the logs.
-        print(f"[email] Resend error {resp.status_code}: {resp.text}")
-        raise HTTPException(status_code=500, detail=f"Email provider error: {resp.text}")
-
-    try:
-        email_id = resp.json().get("id")
-    except Exception:
-        email_id = None
-    print(f"[email] sent OK -> {target_email} (id={email_id})")
+    print(f"[email] OTP sent OK -> {target_email} (id={result.get('id')})")
 
 from transcriber import Transcriber
 from thick_client import router as thick_client_router, get_current_user
