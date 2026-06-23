@@ -83,7 +83,6 @@ def send_otp_email(target_email: str, otp: str, subject_prefix: str):
         print(f"[email] OTP dispatch FAILED for {target_email}: {type(e).__name__}: {e}")
         raise HTTPException(status_code=500, detail="Failed to send verification email.")
 
-# --- THE GPT-4o EDITOR LOGIC WITH CHUNK TRACKING ---
 def refine_transcript_with_gpt(raw_text: str) -> str:
     """Fixes speaker tags across chunks with explicit context."""
     if not raw_text or not raw_text.strip():
@@ -302,7 +301,6 @@ def process_meeting(file: UploadFile = File(...), meeting_type: str = Form("Gene
             chunk_dir = tempfile.mkdtemp()
             chunk_files = []
             
-            # --- HIGH QUALITY VAD CHUNKING (Prevents Audio Flattening) ---
             try:
                 from pydub import AudioSegment
                 from pydub.silence import split_on_silence
@@ -332,7 +330,7 @@ def process_meeting(file: UploadFile = File(...), meeting_type: str = Form("Gene
 
                 for i, gc in enumerate(grouped_chunks):
                     c_path = os.path.join(chunk_dir, f"chunk_{i:04d}.wav")
-                    gc.export(c_path, format="wav") # Preserves high quality for Diarization
+                    gc.export(c_path, format="wav")
                     chunk_files.append(c_path)
                     
             except Exception as e:
@@ -380,13 +378,11 @@ def process_meeting(file: UploadFile = File(...), meeting_type: str = Form("Gene
                     
                     progress_tracker[filename]["current"] += 1
 
-            # --- ADDING CHUNK MARKERS FOR GPT CONTEXT ---
             raw_final_text = ""
             for i in sorted(transcript_parts.keys()):
                 if transcript_parts[i].strip():
                     raw_final_text += f"\n\n--- CHUNK {i+1} ---\n{transcript_parts[i].strip()}"
             
-            # --- APPLY GPT-4o CORRECTION ON THE RAW TEXT ---
             final_text = refine_transcript_with_gpt(raw_final_text)
 
             progress_tracker.pop(filename, None)

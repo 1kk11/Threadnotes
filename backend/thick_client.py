@@ -107,7 +107,6 @@ def _save_transcript_to_cosmos(user_id: str, segments: list) -> str:
     except Exception:
         return ""
 
-# --- NAYA DYNAMIC ENDPOINT ---
 @router.post("/diarize/finalize-live")
 async def finalize_live_stream(
     req: FinalizeRequest,
@@ -119,7 +118,6 @@ async def finalize_live_stream(
         raise HTTPException(status_code=400, detail="No segments provided.")
     
     ts = Transcriber()
-    # Non-blocking async thread so FastAPI doesn't freeze
     cleaned_segments = await asyncio.to_thread(ts.clean_live_transcript_json, raw_segments)
 
     final_db_segments = []
@@ -145,7 +143,6 @@ async def finalize_live_stream(
     return {"status": "success", "id": doc_id, "segments": final_db_segments}
 
 
-# Backup: File Upload fallback
 @router.post("/diarize/stream")
 async def diarize_stream(
     file: UploadFile = File(...),
