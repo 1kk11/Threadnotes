@@ -60,15 +60,16 @@ class Transcriber:
         azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "").strip()
         api_version = os.getenv("AZURE_OPENAI_API_VERSION", "2025-04-01-preview").strip()
 
+        # THE FIX: Increased timeout from 60 to 300 to prevent silent crash on long audios
         if azure_endpoint:
             self.client = AzureOpenAI(
                 api_key=api_key,
                 api_version=api_version,
                 azure_endpoint=azure_endpoint,
-                timeout=60,
+                timeout=300, 
             )
         else:
-            self.client = OpenAI(api_key=api_key, timeout=60)
+            self.client = OpenAI(api_key=api_key, timeout=300)
 
         self.diarize_deployment = os.getenv(
             "AZURE_DIARIZE_DEPLOYMENT", "gpt-4o-transcribe-diarize"
@@ -90,7 +91,9 @@ class Transcriber:
                 response_format="diarized_json",
                 extra_body={"chunking_strategy": "auto"},
             )
-        except Exception:
+        except Exception as e:
+            # Added error logging so Uvicorn doesn't silently crash
+            print(f"Live Diarization Timeout/Error: {e}")
             return []
 
         if hasattr(resp, "model_dump"):
@@ -142,7 +145,6 @@ class Transcriber:
         return int(minutes * 60 + seconds) + 1
 
     def diarize_chunk_file(self, file_path: str) -> str:
-        """Reads a high-quality wav chunk and returns exact tags from Azure."""
         for attempt in range(1, 4):
             try:
                 with open(file_path, "rb") as audio_file:

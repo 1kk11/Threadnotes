@@ -3,6 +3,8 @@ import os
 import uuid
 import json
 import tempfile
+import asyncio
+import subprocess
 from datetime import datetime, timezone
 
 import httpx
@@ -106,8 +108,9 @@ async def diarize_stream(
     file: UploadFile = File(...),
     user: dict = Depends(get_current_user),
 ):
-    """Spool the upload to disk in bounded chunks, then stream it to the diarize model."""
+    """Spool the upload to disk, compress with high-quality to save RAM, then thread-offload to prevent Uvicorn worker kill."""
     tmp_path = None
+    compressed_path = None
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".audio") as tmp:
             tmp_path = tmp.name
@@ -117,17 +120,32 @@ async def diarize_stream(
                     break
                 tmp.write(chunk)
 
+        # 1. High-Quality Compression (128k) to prevent OOM but maintain crystal clear voice distinction
+        compressed_path = tmp_path + "_hq.mp3"
+        cmd = [
+            "ffmpeg", "-y", "-i", tmp_path, 
+            "-vn", "-ar", "16000", "-ac", "1", "-b:a", "128k", 
+            compressed_path
+        ]
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
         client = _build_openai_client()
         deployment = os.getenv(
             "AZURE_DIARIZE_DEPLOYMENT", "gpt-4o-transcribe-diarize"
         ).strip()
-        with open(tmp_path, "rb") as audio:
-            resp = client.audio.transcriptions.create(
-                model=deployment,
-                file=(file.filename or "audio", audio, file.content_type or "audio/wav"),
-                response_format="diarized_json",
-                extra_body={"chunking_strategy": "auto"},
-            )
+        
+        # 2. Wrap the blocking OpenAI call in a function
+        def _call_azure():
+            with open(compressed_path, "rb") as audio:
+                return client.audio.transcriptions.create(
+                    model=deployment,
+                    file=("audio.mp3", audio, "audio/mp3"),
+                    response_format="diarized_json",
+                    extra_body={"chunking_strategy": "auto"},
+                )
+
+        # 3. Use asyncio.to_thread so the event loop NEVER blocks and server doesn't get killed
+        resp = await asyncio.to_thread(_call_azure)
 
         data = (
             resp.model_dump()
@@ -168,3 +186,5 @@ async def diarize_stream(
     finally:
         if tmp_path and os.path.exists(tmp_path):
             os.remove(tmp_path)
+        if compressed_path and os.path.exists(compressed_path):
+            os.remove(compressed_path)
