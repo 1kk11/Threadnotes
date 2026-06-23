@@ -6,13 +6,15 @@ import tempfile
 import asyncio
 import subprocess
 from datetime import datetime, timezone
+from typing import List
 
 import httpx
 import jwt
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from pydantic import BaseModel
 
-from transcriber import interpolate_words
+from transcriber import Transcriber, interpolate_words
 
 SECRET_KEY = os.getenv("JWT_SECRET", "threadnotes-super-secret-key")
 ALGORITHM = "HS256"
@@ -23,6 +25,14 @@ AZURE_SPEECH_REGION = os.getenv("AZURE_SPEECH_REGION", "").strip()
 router = APIRouter()
 _bearer = HTTPBearer(auto_error=True)
 
+class LiveSegment(BaseModel):
+    speaker: str
+    text: str
+    start: float
+    end: float
+
+class FinalizeRequest(BaseModel):
+    segments: List[LiveSegment]
 
 def get_current_user(
     creds: HTTPAuthorizationCredentials = Depends(_bearer),
@@ -33,7 +43,6 @@ def get_current_user(
         raise HTTPException(status_code=401, detail="Session expired")
     except Exception:
         raise HTTPException(status_code=401, detail="Invalid token")
-
 
 @router.get("/azure/token")
 async def get_azure_speech_token(_user: dict = Depends(get_current_user)):
@@ -59,7 +68,6 @@ async def get_azure_speech_token(_user: dict = Depends(get_current_user)):
 
     return {"token": resp.text, "region": AZURE_SPEECH_REGION}
 
-
 def _build_openai_client():
     from openai import OpenAI, AzureOpenAI
 
@@ -76,10 +84,7 @@ def _build_openai_client():
         )
     return OpenAI(api_key=key, timeout=300)
 
-
 def _save_transcript_to_cosmos(user_id: str, segments: list) -> str:
-    """Best-effort upsert into a Cosmos `transcripts` container. Failures are
-    logged, never raised, so a DB hiccup can't lose the user's transcript."""
     try:
         from azure.cosmos import CosmosClient, PartitionKey
 
@@ -102,13 +107,50 @@ def _save_transcript_to_cosmos(user_id: str, segments: list) -> str:
     except Exception:
         return ""
 
+# --- NAYA DYNAMIC ENDPOINT ---
+@router.post("/diarize/finalize-live")
+async def finalize_live_stream(
+    req: FinalizeRequest,
+    user: dict = Depends(get_current_user),
+):
+    """Frontend sends raw Azure JSON segments here. Backend runs fast GPT cleanup and saves."""
+    raw_segments = [s.model_dump() for s in req.segments]
+    if not raw_segments:
+        raise HTTPException(status_code=400, detail="No segments provided.")
+    
+    ts = Transcriber()
+    # Non-blocking async thread so FastAPI doesn't freeze
+    cleaned_segments = await asyncio.to_thread(ts.clean_live_transcript_json, raw_segments)
 
+    final_db_segments = []
+    for seg in cleaned_segments:
+        text = str(seg.get("text", "")).strip()
+        speaker = str(seg.get("speaker", "Unknown")).strip()
+        start = float(seg.get("start", 0.0))
+        end = float(seg.get("end", 0.0))
+        
+        if not text:
+            continue
+
+        final_db_segments.append({
+            "type": "transcript",
+            "text": f"[{speaker}] {text}",
+            "speaker": speaker,
+            "start": start,
+            "end": end,
+            "words": interpolate_words(text, start, end),
+        })
+
+    doc_id = _save_transcript_to_cosmos(user.get("sub", "unknown"), final_db_segments)
+    return {"status": "success", "id": doc_id, "segments": final_db_segments}
+
+
+# Backup: File Upload fallback
 @router.post("/diarize/stream")
 async def diarize_stream(
     file: UploadFile = File(...),
     user: dict = Depends(get_current_user),
 ):
-    """Spool the upload to disk, compress with high-quality to save RAM, then thread-offload to prevent Uvicorn worker kill."""
     tmp_path = None
     compressed_path = None
     try:
@@ -120,7 +162,6 @@ async def diarize_stream(
                     break
                 tmp.write(chunk)
 
-        # 1. High-Quality Compression (128k) to prevent OOM but maintain crystal clear voice distinction
         compressed_path = tmp_path + "_hq.mp3"
         cmd = [
             "ffmpeg", "-y", "-i", tmp_path, 
@@ -134,7 +175,6 @@ async def diarize_stream(
             "AZURE_DIARIZE_DEPLOYMENT", "gpt-4o-transcribe-diarize"
         ).strip()
         
-        # 2. Wrap the blocking OpenAI call in a function
         def _call_azure():
             with open(compressed_path, "rb") as audio:
                 return client.audio.transcriptions.create(
@@ -144,9 +184,7 @@ async def diarize_stream(
                     extra_body={"chunking_strategy": "auto"},
                 )
 
-        # 3. Use asyncio.to_thread so the event loop NEVER blocks and server doesn't get killed
         resp = await asyncio.to_thread(_call_azure)
-
         data = (
             resp.model_dump()
             if hasattr(resp, "model_dump")
