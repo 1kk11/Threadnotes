@@ -25,8 +25,6 @@ def pcm_to_wav_bytes(pcm: bytes) -> bytes:
 
 
 def interpolate_words(text: str, start: float, end: float) -> list:
-    """Spread a phrase's [start, end] across its words proportionally to each
-    word's character length. Approximate (synthetic) per-word timings."""
     words = text.split()
     if not words:
         return []
@@ -67,10 +65,10 @@ class Transcriber:
                 api_key=api_key,
                 api_version=api_version,
                 azure_endpoint=azure_endpoint,
-                timeout=180,
+                timeout=60,
             )
         else:
-            self.client = OpenAI(api_key=api_key, timeout=180)
+            self.client = OpenAI(api_key=api_key, timeout=60)
 
         self.diarize_deployment = os.getenv(
             "AZURE_DIARIZE_DEPLOYMENT", "gpt-4o-transcribe-diarize"
@@ -143,22 +141,36 @@ class Transcriber:
         seconds = float(match.group(3))
         return int(minutes * 60 + seconds) + 1
 
-    def transcribe_audio_file(self, file_path: str) -> str:
+    def diarize_chunk_file(self, file_path: str) -> str:
+        """Reads a high-quality wav chunk and returns exact tags from Azure."""
         for attempt in range(1, 4):
             try:
                 with open(file_path, "rb") as audio_file:
-                    response = self.client.audio.transcriptions.create(
-                        model=self.file_deployment,
-                        file=audio_file,
-                        response_format="text",
-                        extra_body={"chunking_strategy": "auto"},
-                    )
-                text = response if isinstance(response, str) else getattr(
-                    response, "text", ""
+                    audio_bytes = audio_file.read()
+                
+                resp = self.client.audio.transcriptions.create(
+                    model=self.diarize_deployment,
+                    file=(os.path.basename(file_path), audio_bytes, "audio/wav"),
+                    response_format="diarized_json",
+                    extra_body={"chunking_strategy": "auto"},
                 )
-                if text and text.strip():
-                    return text.strip()
-                raise Exception("Empty response received from API")
+                
+                if hasattr(resp, "model_dump"):
+                    data = resp.model_dump()
+                elif isinstance(resp, dict):
+                    data = resp
+                else:
+                    data = json.loads(str(resp))
+
+                segments = data.get("segments") or []
+                chunk_transcript = []
+                for seg in segments:
+                    txt = (seg.get("text") or "").strip()
+                    spk = str(seg.get("speaker", "Speaker 1")).strip() 
+                    if txt:
+                        chunk_transcript.append(f"[{spk}]: {txt}")
+                
+                return "\n".join(chunk_transcript)
 
             except Exception as e:
                 error_msg = str(e)
