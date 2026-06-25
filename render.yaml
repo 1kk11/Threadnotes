@@ -14,3 +14,26 @@ services:
         sync: false
       - key: AZURE_SPEECH_REGION
         sync: false
+      # GPT-4o diarization bridge (secrets live ONLY in the vault)
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: AZURE_OPENAI_ENDPOINT
+        sync: false
+      - key: AZURE_OPENAI_KEY
+        sync: false
+      - key: AZURE_OPENAI_API_VERSION
+        sync: false
+      - key: AZURE_DIARIZE_DEPLOYMENT
+        sync: false
+      # Cosmos DB (auth + transcript persistence)
+      - key: COSMOS_ENDPOINT
+        sync: false
+      - key: COSMOS_KEY
+        sync: false
+      - key: COSMOS_DATABASE
+        sync: false
+      # Gmail OTP (signup / password reset)
+      - key: EMAIL_SENDER
+        sync: false
+      - key: EMAIL_PASSWORD
+        sync: false

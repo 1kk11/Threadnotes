@@ -115,7 +115,6 @@ export default function Dashboard() {
     if (msg) setStatusMessage(`⚠️ ${msg}`);
   }, []);
 
-  // FIXED: Yahan function names direct match kar rahe hain
   const {
     start,
     pause,
@@ -257,52 +256,124 @@ export default function Dashboard() {
     clearPlayback();
     setLines([]);
     setInterim("");
+    setMergedTranscript([]);
     setIsUploading(true);
     setUploadProgress(2);
-    setStatusMessage("Preparing report...");
 
-    const safeName = encodeURIComponent(uploadFile.name);
-    const progressInterval = setInterval(async () => {
-      try {
-        const res = await fetch(`${API_URL}/progress/${safeName}`);
-        const data = await res.json();
-        if (data.total > 0) {
-          setUploadProgress(Math.round((data.current / data.total) * 95));
-        }
-      } catch {}
-    }, 2000);
+    const token = localStorage.getItem("token");
+    const electron =
+      typeof window !== "undefined" ? window.electronAPI : undefined;
+    const localPath = electron?.getPathForFile?.(uploadFile) || "";
 
-    const form = new FormData();
-    form.append("file", uploadFile);
-    form.append("meeting_type", "Desktop Upload");
-
-    try {
-      const res = await fetch(`${API_URL}/transcribe`, {
-        method: "POST",
-        body: form,
-      });
-      const data = await res.json();
-      clearInterval(progressInterval);
-      if (sid !== sessionIdRef.current) return;
+    const finish = (rows: MergedTranscriptRow[], doneMsg: string) => {
       setUploadProgress(100);
       setTimeout(() => {
         if (sid !== sessionIdRef.current) return;
         setIsUploading(false);
         setUploadProgress(0);
-        if (data.status === "success") {
-          setLines([data.transcript]);
+        if (rows.length > 0) {
+          setMergedTranscript(rows);
+          setLines([]);
           setStatusMessage("Analysis ready!");
           setActiveTab("live");
         } else {
-          setStatusMessage("Failed to process file.");
+          setStatusMessage(doneMsg);
         }
-      }, 400);
-    } catch {
-      clearInterval(progressInterval);
+      }, 300);
+    };
+
+    try {
+      if (electron?.audioCompressAndRead && localPath) {
+        setStatusMessage("Compressing audio...");
+        const climb = setInterval(
+          () => setUploadProgress((p) => (p < 40 ? p + 4 : p)),
+          600,
+        );
+        const { chunks, segmentSeconds, mimeType } =
+          await electron.audioCompressAndRead(localPath);
+        clearInterval(climb);
+        if (sid !== sessionIdRef.current) return;
+
+        const stitched: MergedTranscriptRow[] = [];
+        for (let i = 0; i < chunks.length; i++) {
+          setStatusMessage(
+            chunks.length > 1
+              ? `Diarizing part ${i + 1} of ${chunks.length}...`
+              : "Diarizing with GPT-4o...",
+          );
+          const form = new FormData();
+          form.append(
+            "file",
+            new Blob([chunks[i].buffer], { type: mimeType }),
+            chunks[i].name,
+          );
+          const res = await fetch(`${API_URL}/diarize/stream`, {
+            method: "POST",
+            headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+            body: form,
+          });
+          const data = await res.json();
+          if (sid !== sessionIdRef.current) return;
+          if (!res.ok || data.status === "error") {
+            throw new Error(
+              data.detail || data.message ||
+                `Diarization failed on part ${i + 1}`,
+            );
+          }
+          const offset = i * segmentSeconds;
+          const segs = (Array.isArray(data.merged_transcript)
+            ? data.merged_transcript
+            : Array.isArray(data.segments)
+              ? data.segments
+              : []) as MergedTranscriptRow[];
+          for (const s of segs) {
+            stitched.push({
+              ...s,
+              start: (Number(s.start) || 0) + offset,
+              end: (Number(s.end) || 0) + offset,
+            });
+          }
+          setUploadProgress(40 + Math.round(((i + 1) / chunks.length) * 55));
+        }
+
+        finish(stitched, "No speech detected in the uploaded file.");
+        return;
+      }
+
+      setStatusMessage("Uploading & diarizing with GPT-4o...");
+      const climb = setInterval(
+        () => setUploadProgress((p) => (p < 90 ? p + 3 : p)),
+        1000,
+      );
+      const form = new FormData();
+      form.append("file", uploadFile);
+      const res = await fetch(`${API_URL}/diarize/stream`, {
+        method: "POST",
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        body: form,
+      });
+      const data = await res.json();
+      clearInterval(climb);
+      if (sid !== sessionIdRef.current) return;
+      if (!res.ok || data.status === "error") {
+        setIsUploading(false);
+        setUploadProgress(0);
+        setStatusMessage(
+          data.detail || data.message || "Failed to process file.",
+        );
+        return;
+      }
+      finish(
+        Array.isArray(data.segments)
+          ? (data.segments as MergedTranscriptRow[])
+          : [],
+        "No speech detected in the uploaded file.",
+      );
+    } catch (e: any) {
       if (sid !== sessionIdRef.current) return;
       setIsUploading(false);
       setUploadProgress(0);
-      setStatusMessage("Connection failed.");
+      setStatusMessage(e?.message || "Could not process the file.");
     }
   }, [uploadFile, clearPlayback]);
 

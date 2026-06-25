@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState, useEffect } from "react";
+import { useCallback, useRef, useState } from "react";
 import * as SpeechSDK from "microsoft-cognitiveservices-speech-sdk";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -19,7 +19,6 @@ type AzureTranscriptItem = {
 };
 
 export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
-  // NAYA: Global state ko UI updates bhejne ke liye Callback Ref (Taaki page change par break na ho)
   const callbacksRef = useRef({
     onPartial: initialProps?.onPartial,
     onFinal: initialProps?.onFinal,
@@ -37,12 +36,10 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
     [],
   );
 
-  // NEW STATES FOR DASHBOARD UI (Mic aur Language yahan update honge)
   const [micLabel, setMicLabel] = useState<string>("Default Microphone");
   const [detectedLanguage, setDetectedLanguage] = useState<string>("English");
   const [audioQuality, setAudioQuality] = useState<string>("Medium");
 
-  // TUMHARA ORIGINAL LOGIC - Ek bhi line change nahi hui hai
   const recognizerRef = useRef<SpeechSDK.SpeechRecognizer | null>(null);
   const renewTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -70,7 +67,7 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
     return localStorage.getItem("token");
   }, [initialProps]);
 
-  const LOCAL_AI_ENGINE_URL = "http://127.0.0.1:8000/diarize-and-merge";
+  const DIARIZE_URL = `${API_URL}/diarize/stream`;
 
   const fetchAzureToken = useCallback(async (): Promise<{
     token: string;
@@ -126,7 +123,6 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
         region,
       );
 
-      // Auto Detect Language (English and Hindi dono handle karega)
       const autoDetectSourceLanguageConfig =
         SpeechSDK.AutoDetectSourceLanguageConfig.fromLanguages([
           "en-US",
@@ -152,7 +148,6 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
           e.result.reason === SpeechSDK.ResultReason.RecognizedSpeech &&
           e.result.text
         ) {
-          // Detect which language was spoken
           const lang = e.result.properties.getProperty(
             (SpeechSDK.PropertyId as any)
               .SpeechServiceConnection_AutoDetectSourceLanguageResult,
@@ -242,20 +237,17 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
     try {
       finishingRef.current = false;
 
-      // 1. Get Microphone Audio
       const micStream = await navigator.mediaDevices.getUserMedia({
         audio: true,
       });
       micStreamRef.current = micStream;
 
-      // EXTRACT MIC NAME FOR UI (Yahan Earpods ya Laptop mic ka naam aayega)
       if (micStream.getAudioTracks().length > 0) {
         setMicLabel(
           micStream.getAudioTracks()[0].label || "Default Microphone",
         );
       }
 
-      // 2. Get System Audio (Electron se Teams/Meet ki aawaz)
       let systemStream: MediaStream | null = null;
       try {
         if (
@@ -286,7 +278,6 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
         console.warn("System audio capture skipped.", err);
       }
 
-      // 3. AudioContext Setup
       const AudioContextClass =
         window.AudioContext || (window as any).webkitAudioContext;
       const audioCtx = new AudioContextClass();
@@ -304,10 +295,9 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
         systemStream.getTracks().forEach((t) => t.stop());
       }
 
-      // AUDIO QUALITY ANALYZER
       const analyser = audioCtx.createAnalyser();
       analyser.fftSize = 256;
-      micSource.connect(analyser); // We monitor the mic for quality
+      micSource.connect(analyser);
       const bufferLength = analyser.frequencyBinCount;
       const dataArray = new Uint8Array(bufferLength);
 
@@ -325,7 +315,6 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
         }
       }, 1000);
 
-      // 4. Record Mixed Stream (Tumhari + Samne wale ki aawaz)
       const mixedStream = destination.stream;
       streamRef.current = mixedStream;
       isPausedRef.current = false;
@@ -440,7 +429,6 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
       try {
         mediaRecorderRef.current.stop();
       } catch {
-        // ignore stop errors
       }
     }
 
@@ -454,31 +442,60 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
       }
     }
 
-    const transcriptPayload = [...azureTranscriptRef.current];
-    let mergedTranscript: AzureTranscriptItem[] = [];
+    let mergedTranscript: any[] = [];
 
-    if (audioFilePath && transcriptPayload.length > 0) {
-      const response = await fetch(LOCAL_AI_ENGINE_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          audio_file_path: audioFilePath,
-          azure_transcript: transcriptPayload,
-        }),
-      });
+    if (
+      audioFilePath &&
+      azureTranscriptRef.current.length > 0 &&
+      typeof window !== "undefined" &&
+      window.electronAPI?.audioCompressAndRead
+    ) {
+      const jwt = readJwt();
+      const { chunks, segmentSeconds, mimeType } =
+        await window.electronAPI.audioCompressAndRead(audioFilePath);
 
-      const result = await response.json();
-      if (!response.ok) {
-        throw new Error(
-          result.detail || `Local AI engine request failed: ${response.status}`,
+      const stitched: any[] = [];
+      for (let i = 0; i < chunks.length; i++) {
+        const { buffer, name } = chunks[i];
+        callbacksRef.current.onPartial?.(
+          chunks.length > 1
+            ? `Diarizing part ${i + 1} of ${chunks.length}...`
+            : "Diarizing transcript...",
         );
+
+        const form = new FormData();
+        form.append("file", new Blob([buffer], { type: mimeType }), name);
+
+        const response = await fetch(DIARIZE_URL, {
+          method: "POST",
+          headers: jwt ? { Authorization: `Bearer ${jwt}` } : undefined,
+          body: form,
+        });
+
+        const result = await response.json();
+        if (!response.ok || result.status === "error") {
+          throw new Error(
+            result.detail || result.message ||
+              `Vault diarization failed on part ${i + 1}: ${response.status}`,
+          );
+        }
+
+        const offset = i * segmentSeconds;
+        const segs = Array.isArray(result.merged_transcript)
+          ? result.merged_transcript
+          : Array.isArray(result.segments)
+            ? result.segments
+            : [];
+        for (const s of segs) {
+          stitched.push({
+            ...s,
+            start: (Number(s.start) || 0) + offset,
+            end: (Number(s.end) || 0) + offset,
+          });
+        }
       }
 
-      mergedTranscript = Array.isArray(result.merged_transcript)
-        ? result.merged_transcript
-        : [];
+      mergedTranscript = stitched;
     }
 
     cleanupStreams();
@@ -488,7 +505,7 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
 
     const audioUrl = audioFilePath ? `file://${audioFilePath}` : null;
     return { status: "success", audioUrl, merged_transcript: mergedTranscript };
-  }, [cleanupStreams]);
+  }, [cleanupStreams, readJwt, DIARIZE_URL]);
 
   const cancel = useCallback(() => {
     finishingRef.current = true;

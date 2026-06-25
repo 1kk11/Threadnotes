@@ -7,7 +7,7 @@ const {
     session,
     ipcMain,
     dialog,
-    desktopCapturer, // <-- NAYA: Screen source uthane ke liye add kiya hai
+    desktopCapturer,
 } = require("electron");
 const { spawn } = require("child_process");
 const path = require("path");
@@ -31,6 +31,12 @@ function createRecordingFilePath() {
     return path.join(recordingsDir, fileName);
 }
 
+function getFfmpegPath() {
+    return app.isPackaged
+        ? path.join(process.resourcesPath, "ffmpeg.exe")
+        : path.join(__dirname, "..", "resources", "ffmpeg.exe");
+}
+
 function closeAllAudioStreams() {
     for (const [filePath, stream] of audioWriteStreams.entries()) {
         try {
@@ -40,57 +46,6 @@ function closeAllAudioStreams() {
         }
         audioWriteStreams.delete(filePath);
     }
-}
-
-let localAiProcess = null;
-
-function spawnLocalAiEngine() {
-    const isPackaged = app.isPackaged;
-    const pythonExecutable = process.env.PYTHON_EXECUTABLE || "python";
-
-    const packagedEnginePath = path.join(process.resourcesPath, "local_ai_engine.exe");
-    const devEnginePath = path.join(__dirname, "..", "backend", "local_ai_engine.py");
-
-    const command = isPackaged ? packagedEnginePath : pythonExecutable;
-    const args = isPackaged ? [] : [devEnginePath];
-    const cwd = isPackaged ? process.resourcesPath : path.join(__dirname, "..");
-
-    try {
-        localAiProcess = spawn(command, args, {
-            cwd,
-            env: {
-                ...process.env,
-                PYTHONUNBUFFERED: "1",
-            },
-            stdio: ["ignore", "pipe", "pipe"],
-        });
-
-        localAiProcess.stdout.on("data", (data) => {
-            console.log(`[Local AI] ${data.toString().trim()}`);
-        });
-        localAiProcess.stderr.on("data", (data) => {
-            console.error(`[Local AI][ERR] ${data.toString().trim()}`);
-        });
-        localAiProcess.on("exit", (code, signal) => {
-            console.log(
-                `[Local AI] process exited with code=${code} signal=${signal}`,
-            );
-            localAiProcess = null;
-        });
-    } catch (error) {
-        console.error("Failed to spawn local AI engine:", error);
-        localAiProcess = null;
-    }
-}
-
-function stopLocalAiEngine() {
-    if (!localAiProcess) return;
-    try {
-        localAiProcess.kill("SIGTERM");
-    } catch (error) {
-        console.warn("Could not terminate local AI process gracefully:", error);
-    }
-    localAiProcess = null;
 }
 
 const DEV_URL = "http://localhost:3000";
@@ -205,7 +160,6 @@ app.whenReady().then(() => {
         (_wc, permission) => permission === "media",
     );
 
-    spawnLocalAiEngine();
     createWindow();
 
     app.on("activate", () => {
@@ -215,12 +169,7 @@ app.whenReady().then(() => {
 
 app.on("window-all-closed", () => {
     closeAllAudioStreams();
-    stopLocalAiEngine();
     if (process.platform !== "darwin") app.quit();
-});
-
-app.on("will-quit", () => {
-    stopLocalAiEngine();
 });
 
 ipcMain.handle("save-transcript", async(_event, { content, defaultName }) => {
@@ -276,9 +225,52 @@ ipcMain.handle("audio-file-close", async(_event, filePath) => {
     });
 });
 
-// <-- NAYA: System audio / Screen share background permission handler
+const SEGMENT_SECONDS = 9000;
+
+ipcMain.handle("audio-compress-and-read", async(_event, filePath) => {
+    if (!filePath || !fs.existsSync(filePath)) {
+        throw new Error(`Recording file not found: ${filePath}`);
+    }
+    const ffmpeg = getFfmpegPath();
+    const dir = path.dirname(filePath);
+    const base = path.basename(filePath).replace(/\.[^.]+$/, "");
+    const outPattern = path.join(dir, `${base}-chunk-%03d.ogg`);
+
+    await new Promise((resolve, reject) => {
+        const proc = spawn(ffmpeg, [
+            "-y", "-i", filePath,
+            "-vn", "-ar", "16000", "-ac", "1", "-c:a", "libopus", "-b:a", "24k",
+            "-f", "segment", "-segment_time", String(SEGMENT_SECONDS),
+            outPattern,
+        ]);
+        proc.on("error", reject);
+        proc.on("exit", (code) =>
+            code === 0 ? resolve() : reject(new Error(`ffmpeg exited with code ${code}`)),
+        );
+    });
+
+    const produced = (await fs.promises.readdir(dir))
+        .filter((f) => f.startsWith(`${base}-chunk-`) && f.endsWith(".ogg"))
+        .sort();
+
+    const chunks = [];
+    for (const f of produced) {
+        const full = path.join(dir, f);
+        const data = await fs.promises.readFile(full);
+        chunks.push({
+            buffer: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength),
+            name: f,
+        });
+        fs.promises.unlink(full).catch(() => {});
+    }
+
+    if (chunks.length === 0) {
+        throw new Error("ffmpeg produced no audio chunks.");
+    }
+    return { chunks, segmentSeconds: SEGMENT_SECONDS, mimeType: "audio/ogg" };
+});
+
 ipcMain.handle("get-desktop-source-id", async() => {
     const sources = await desktopCapturer.getSources({ types: ["screen"] });
-    // Hum pehli screen ka id return kar rahe hain jisse system audio track ho sake
     return sources[0].id;
 });

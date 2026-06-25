@@ -88,7 +88,7 @@ Render's containers reach Cosmos over the public internet, so Cosmos must allow 
   addresses** (Render dashboard → service → **Connect / Outbound IPs**) to the
   Cosmos firewall allow-list. Re-check these if you change Render region/plan.
 - Ensure the **database and containers exist** (`users`; `transcripts` is created on
-  first save by `thick_client.py`).
+  first diarization save by the Cloud Vault's `/diarize/stream`).
 
 If the backend logs Cosmos timeouts/403s on startup or login, this firewall is the
 usual cause.

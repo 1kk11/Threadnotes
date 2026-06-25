@@ -51,8 +51,8 @@
             "package.json"
         ],
         "extraResources": [{
-            "from": "../backend/dist/local_ai_engine.exe",
-            "to": "local_ai_engine.exe"
+            "from": "resources/ffmpeg.exe",
+            "to": "ffmpeg.exe"
         }],
         "win": {
             "icon": "build/icon.ico",
