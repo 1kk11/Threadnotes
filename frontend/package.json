@@ -1,79 +1,75 @@
 {
-  "name": "frontend",
-  "version": "0.1.0",
-  "private": true,
-  "main": "electron/main.js",
-  "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
-    "lint": "eslint",
-    "electron": "electron .",
-    "electron:dev": "concurrently -k \"next dev\" \"wait-on tcp:3000 && electron .\"",
-    "generate-icon": "node scripts/generate-icon.js",
-    "dist": "next build && electron-builder",
-    "dist:win": "next build && electron-builder --win"
-  },
-  "dependencies": {
-    "@types/react-calendar": "^3.9.0",
-    "lucide-react": "^1.21.0",
-    "microsoft-cognitiveservices-speech-sdk": "^1.50.0",
-    "next": "16.2.1",
-    "postcss": "^8.5.8",
-    "react": "19.2.4",
-    "react-calendar": "^6.0.1",
-    "react-dom": "19.2.4"
-  },
-  "devDependencies": {
-    "@tailwindcss/postcss": "^4.2.2",
-    "@types/node": "^20",
-    "@types/react": "^19",
-    "@types/react-dom": "^19",
-    "concurrently": "^9.1.0",
-    "electron": "^33.2.0",
-    "electron-builder": "^25.1.8",
-    "eslint": "^9",
-    "eslint-config-next": "16.2.1",
-    "tailwindcss": "^4.2.2",
-    "typescript": "^5",
-    "wait-on": "^8.0.1"
-  },
-  "build": {
-    "appId": "com.threadnotes.desktop",
-    "productName": "ThreadNotes",
-    "directories": {
-      "output": "dist-electron"
+    "name": "frontend",
+    "version": "0.1.0",
+    "private": true,
+    "main": "electron/main.js",
+    "scripts": {
+        "dev": "next dev",
+        "build": "next build",
+        "start": "next start",
+        "lint": "eslint",
+        "electron": "electron .",
+        "electron:dev": "concurrently -k \"next dev\" \"wait-on tcp:3000 && electron .\"",
+        "generate-icon": "node scripts/generate-icon.js",
+        "dist": "next build && electron-builder",
+        "dist:win": "next build && electron-builder --win"
     },
-    "files": [
-      "electron/**/*",
-      "out/**/*",
-      "build/icon.ico",
-      "package.json"
-    ],
-    "extraResources": [
-      {
-        "from": "../backend/dist/local_ai_engine.exe",
-        "to": "local_ai_engine.exe"
-      }
-    ],
-    "win": {
-      "icon": "build/icon.ico",
-      "target": [
-        {
-          "target": "nsis",
-          "arch": [
-            "x64"
-          ]
+    "dependencies": {
+        "@types/react-calendar": "^3.9.0",
+        "lucide-react": "^1.21.0",
+        "microsoft-cognitiveservices-speech-sdk": "^1.50.0",
+        "next": "16.2.1",
+        "postcss": "^8.5.8",
+        "react": "19.2.4",
+        "react-calendar": "^6.0.1",
+        "react-dom": "19.2.4"
+    },
+    "devDependencies": {
+        "@tailwindcss/postcss": "^4.2.2",
+        "@types/node": "^20",
+        "@types/react": "^19",
+        "@types/react-dom": "^19",
+        "concurrently": "^9.1.0",
+        "electron": "^33.2.0",
+        "electron-builder": "^25.1.8",
+        "eslint": "^9",
+        "eslint-config-next": "16.2.1",
+        "tailwindcss": "^4.2.2",
+        "typescript": "^5",
+        "wait-on": "^8.0.1"
+    },
+    "build": {
+        "appId": "com.threadnotes.desktop",
+        "productName": "ThreadNotes",
+        "directories": {
+            "output": "dist-electron"
+        },
+        "files": [
+            "electron/**/*",
+            "out/**/*",
+            "build/icon.ico",
+            "package.json"
+        ],
+        "extraResources": [{
+            "from": "../backend/dist/local_ai_engine.exe",
+            "to": "local_ai_engine.exe"
+        }],
+        "win": {
+            "icon": "build/icon.ico",
+            "target": [{
+                "target": "nsis",
+                "arch": [
+                    "x64"
+                ]
+            }]
+        },
+        "nsis": {
+            "oneClick": false,
+            "perMachine": false,
+            "allowToChangeInstallationDirectory": true,
+            "createDesktopShortcut": true,
+            "installerIcon": "build/icon.ico",
+            "uninstallerIcon": "build/icon.ico"
         }
-      ]
-    },
-    "nsis": {
-      "oneClick": false,
-      "perMachine": false,
-      "allowToChangeInstallationDirectory": true,
-      "createDesktopShortcut": true,
-      "installerIcon": "build/icon.ico",
-      "uninstallerIcon": "build/icon.ico"
     }
-  }
 }

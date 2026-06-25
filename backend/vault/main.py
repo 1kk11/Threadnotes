@@ -1,3 +1,4 @@
+# PRODUCTION VAULT: Only for Auth & Token Minting. No heavy compute allowed.
 from datetime import datetime, timedelta
 import os
 import jwt
