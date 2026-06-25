@@ -2,7 +2,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { Plus } from "lucide-react";
-import { useAzureSpeech } from "@/hooks/useAzureSpeech";
+import { useGlobalRecording } from "@/components/GlobalRecordingProvider";
 import MyMeetings from "@/components/MyMeetings";
 import Sidebar, { type DashboardView } from "./Sidebar";
 import CaptureControls from "./CaptureControls";
@@ -15,6 +15,13 @@ import {
 } from "@/lib/meetingStore";
 import { getUserName, clearSession } from "@/lib/auth";
 import ConfirmModal from "@/components/ui/ConfirmModal";
+
+type MergedTranscriptRow = {
+  speaker: string;
+  text: string;
+  start: number;
+  end: number;
+};
 
 export type CaptureTab = "live" | "upload";
 
@@ -62,6 +69,8 @@ export default function Dashboard() {
   const [segments, setSegments] = useState<Segment[]>([]);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [showPlayback, setShowPlayback] = useState(false);
+  const [mergedTranscript, setMergedTranscript] = useState<MergedTranscriptRow[]>([]);
+  const [isDiarizing, setIsDiarizing] = useState(false);
 
   const [showFinishModal, setShowFinishModal] = useState(false);
   const [showNewConvoModal, setShowNewConvoModal] = useState(false);
@@ -106,11 +115,26 @@ export default function Dashboard() {
     if (msg) setStatusMessage(`⚠️ ${msg}`);
   }, []);
 
-  const { start, pause, resume, finishAndUpload, cancel } = useAzureSpeech({
-    onPartial: handleAzurePartial,
-    onFinal: handleAzureFinal,
-    onError: handleAzureError,
-  });
+  // FIXED: Yahan function names direct match kar rahe hain
+  const {
+    start,
+    pause,
+    resume,
+    finishAndUpload,
+    cancel,
+    micLabel,
+    detectedLanguage,
+    audioQuality,
+    setCallbacks,
+  } = useGlobalRecording();
+
+  useEffect(() => {
+    setCallbacks({
+      onPartial: handleAzurePartial,
+      onFinal: handleAzureFinal,
+      onError: handleAzureError,
+    });
+  }, [handleAzurePartial, handleAzureFinal, handleAzureError, setCallbacks]);
 
   useEffect(() => {
     return () => {
@@ -150,6 +174,7 @@ export default function Dashboard() {
 
   const clearPlayback = useCallback(() => {
     setSegments([]);
+    setMergedTranscript([]);
     setShowPlayback(false);
     setAudioUrl((prev) => {
       if (prev) URL.revokeObjectURL(prev);
@@ -162,6 +187,7 @@ export default function Dashboard() {
     clearPlayback();
     setLines([]);
     setInterim("");
+    setMergedTranscript([]);
     setSessionTime(0);
     setStatusMessage(null);
     const ok = await start();
@@ -195,7 +221,8 @@ export default function Dashboard() {
     setShowFinishModal(false);
     setIsRecording(false);
     setIsPaused(false);
-    setStatusMessage("Finalizing & diarizing...");
+    setIsDiarizing(true);
+    setStatusMessage("Processing Audio & Diarizing...");
     try {
       const result = await finishAndUpload();
       if (sid !== sessionIdRef.current) return;
@@ -205,22 +232,22 @@ export default function Dashboard() {
           return result.audioUrl;
         });
       }
-      if (Array.isArray(result?.segments) && result.segments.length > 0) {
-        setSegments(result.segments as Segment[]);
-        setLines(
-          result.segments.map(
-            (s: any) => `${s.speaker}: ${stripSpeakerPrefix(s.text)}`,
-          ),
-        );
+      if (Array.isArray(result?.merged_transcript)) {
+        setMergedTranscript(result.merged_transcript as MergedTranscriptRow[]);
+        setLines([]);
         setInterim("");
         setShowPlayback(true);
       }
       setStatusMessage(
-        result?.status === "success" ? "Playback ready" : "Recording finished",
+        result?.status === "success"
+          ? "Meeting transcript is ready"
+          : "Recording finished",
       );
     } catch (e: any) {
       if (sid !== sessionIdRef.current) return;
       setStatusMessage(`⚠️ ${e?.message || "Finish failed"}`);
+    } finally {
+      setIsDiarizing(false);
     }
   }, [finishAndUpload, stopLiveEvents]);
 
@@ -280,7 +307,8 @@ export default function Dashboard() {
   }, [uploadFile, clearPlayback]);
 
   const handleSaveTranscript = useCallback(async () => {
-    if (!transcriptText.trim() && segments.length === 0) return;
+    if (!transcriptText.trim() && segments.length === 0 && mergedTranscript.length === 0)
+      return;
     const defaultName = `ThreadNotes_Transcript_${new Date().toISOString().slice(0, 10)}.txt`;
 
     try {
@@ -304,7 +332,13 @@ export default function Dashboard() {
       }
 
       const entries =
-        segments.length > 0
+        mergedTranscript.length > 0
+          ? mergedTranscript.map((item) => ({
+              speaker: item.speaker,
+              text: stripSpeakerPrefix(item.text),
+              timestamp: "",
+            }))
+          : segments.length > 0
           ? segments.map((s) => ({
               speaker: s.speaker,
               text: stripSpeakerPrefix(s.text),
@@ -441,18 +475,115 @@ export default function Dashboard() {
                   uploadProgress={uploadProgress}
                   onSelectFile={setUploadFile}
                   onProcessUpload={handleProcessUpload}
+                  micLabel={micLabel}
+                  detectedLanguage={detectedLanguage}
+                  audioQuality={audioQuality}
                 />
               </div>
               <div className="flex min-h-0 flex-1 flex-col">
-                <TranscriptArea
-                  transcriptText={transcriptText}
-                  segments={segments}
-                  audioUrl={audioUrl}
-                  showPlayback={showPlayback}
-                  editable={!isRecording}
-                  onSave={handleSaveTranscript}
-                  onTranscriptEdit={handleTranscriptEdit}
-                />
+                {isDiarizing ? (
+                  <div className="flex min-h-[320px] flex-col items-center justify-center rounded-3xl border border-dashed border-slate-300 bg-white/90 p-10 text-center shadow-sm shadow-slate-200/60">
+                    <div className="mb-4 inline-flex h-14 w-14 items-center justify-center rounded-full bg-violet-50 text-violet-600 shadow-inner shadow-violet-100">
+                      <span className="text-2xl font-black">⏳</span>
+                    </div>
+                    <h3 className="text-xl font-semibold text-slate-900">
+                      Processing Audio &amp; Diarizing...
+                    </h3>
+                    <p className="mt-3 max-w-sm text-sm leading-6 text-slate-500">
+                      The local AI engine is merging your live transcript with
+                      speaker segments. This may take a few seconds.
+                    </p>
+                  </div>
+                ) : mergedTranscript.length > 0 ? (
+                  <div className="flex min-h-[320px] flex-col rounded-3xl border border-slate-200 bg-white px-6 py-6 shadow-sm shadow-slate-200/60">
+                    <div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                      <div>
+                        <h3 className="text-lg font-semibold text-slate-900">
+                          Speaker-labeled Transcript
+                        </h3>
+                        <p className="mt-1 text-sm text-slate-500">
+                          Final transcript merged with local speaker diarization.
+                        </p>
+                      </div>
+                      <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold uppercase tracking-[0.24em] text-slate-600">
+                        {mergedTranscript.length} entries
+                      </span>
+                    </div>
+                    <div className="mb-4 grid gap-2 sm:grid-cols-2">
+                      {Array.from(
+                        new Set(mergedTranscript.map((item) => item.speaker)),
+                      ).map((speaker, index) => {
+                        const colorClasses = [
+                          "bg-slate-50 border-slate-200 text-slate-700",
+                          "bg-violet-50 border-violet-200 text-violet-800",
+                          "bg-emerald-50 border-emerald-200 text-emerald-800",
+                          "bg-amber-50 border-amber-200 text-amber-800",
+                          "bg-rose-50 border-rose-200 text-rose-800",
+                          "bg-cyan-50 border-cyan-200 text-cyan-800",
+                        ];
+                        const styleClass = colorClasses[index % colorClasses.length];
+                        return (
+                          <div
+                            key={speaker}
+                            className={`flex items-center gap-3 rounded-2xl border px-3 py-2 text-xs font-semibold ${styleClass}`}
+                          >
+                            <span className="inline-flex h-2.5 w-2.5 rounded-full bg-slate-400" />
+                            <span>{speaker}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <div className="space-y-4 overflow-y-auto pr-2">
+                      {mergedTranscript.map((item, index) => {
+                        const speakerIndex = Number(item.speaker.replace(/[^0-9]/g, "")) - 1;
+                        const colorClasses = [
+                          "bg-slate-50 border-slate-200 text-slate-800",
+                          "bg-violet-50 border-violet-200 text-violet-900",
+                          "bg-emerald-50 border-emerald-200 text-emerald-900",
+                          "bg-amber-50 border-amber-200 text-amber-900",
+                          "bg-rose-50 border-rose-200 text-rose-900",
+                          "bg-cyan-50 border-cyan-200 text-cyan-900",
+                        ];
+                        const styleClass =
+                          colorClasses[speakerIndex % colorClasses.length];
+
+                        return (
+                          <div
+                            key={`${item.speaker}-${item.start}-${index}`}
+                            className={`rounded-3xl border px-5 py-4 shadow-sm ${styleClass}`}
+                          >
+                            <div className="flex flex-wrap items-center gap-3">
+                              <div className="inline-flex h-10 w-10 items-center justify-center rounded-2xl bg-white/90 text-sm font-semibold text-slate-900 shadow-sm">
+                                {item.speaker.split(" ").map((word) => word[0]).join("")}
+                              </div>
+                              <div>
+                                <p className="text-sm font-semibold text-slate-900">
+                                  {item.speaker}
+                                </p>
+                                <p className="text-xs uppercase tracking-[0.18em] text-slate-500">
+                                  {formatTime(item.start)} – {formatTime(item.end)}
+                                </p>
+                              </div>
+                            </div>
+                            <p className="mt-4 text-sm leading-7 text-slate-700">
+                              {stripSpeakerPrefix(item.text)}
+                            </p>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : (
+                  <TranscriptArea
+                    transcriptText={transcriptText}
+                    segments={segments}
+                    audioUrl={audioUrl}
+                    showPlayback={showPlayback}
+                    editable={!isRecording}
+                    onSave={handleSaveTranscript}
+                    onTranscriptEdit={handleTranscriptEdit}
+                  />
+                )}
               </div>
             </div>
           </div>
@@ -495,7 +626,10 @@ export default function Dashboard() {
               {isPaused ? "Resume" : "Pause"}
             </button>
             <button
-              onClick={() => setShowFinishModal(true)}
+              onClick={() => {
+                setView("dashboard");
+                setShowFinishModal(true);
+              }}
               className="flex-1 rounded-xl bg-linear-to-r from-rose-500 to-red-500 py-2.5 text-xs font-bold text-white shadow-md transition-all hover:from-rose-600 hover:to-red-600 active:scale-95"
             >
               Finish
@@ -507,7 +641,9 @@ export default function Dashboard() {
       {showFinishModal && (
         <div className="fixed inset-0 z-100 flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-sm">
           <div className="w-full max-w-sm rounded-3xl border border-white/60 bg-white p-7 shadow-2xl">
-            <h3 className="text-xl font-bold text-slate-900">Finish recording?</h3>
+            <h3 className="text-xl font-bold text-slate-900">
+              Finish recording?
+            </h3>
             <p className="mt-2 text-sm text-slate-500">
               We&apos;ll stop the live stream and generate the final
               speaker-tagged transcript.

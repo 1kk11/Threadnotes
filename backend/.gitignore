@@ -14,7 +14,14 @@ __pycache__/
 .DS_Store
 Thumbs.db
 *.log
+
 # Gmail API secrets — never commit
 credentials.json
 credentials.json.json
 token.json
+
+# PyInstaller & Build junk — NEVER COMMIT THE MASSIVE .EXE
+build/
+dist/
+*.exe
+*.spec

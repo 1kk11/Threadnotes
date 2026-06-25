@@ -50,6 +50,12 @@
       "build/icon.ico",
       "package.json"
     ],
+    "extraResources": [
+      {
+        "from": "../backend/dist/local_ai_engine.exe",
+        "to": "local_ai_engine.exe"
+      }
+    ],
     "win": {
       "icon": "build/icon.ico",
       "target": [

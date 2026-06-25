@@ -2,6 +2,9 @@ import type { Metadata, Viewport } from "next";
 import { Sora } from "next/font/google";
 import "./globals.css";
 import AuthInterceptor from "@/components/AuthInterceptor";
+// Global state wrappers
+import { GlobalAudioProvider } from "@/components/GlobalAudioProvider";
+import { GlobalRecordingProvider } from "@/components/GlobalRecordingProvider";
 
 const sora = Sora({
   subsets: ["latin"],
@@ -30,10 +33,15 @@ export default function RootLayout({
   return (
     <html lang="en" className={sora.variable}>
       <body className="m-0 overflow-hidden bg-[var(--bg-primary)] p-0 font-sans antialiased text-[var(--text-primary)]">
-        <div className="h-[100dvh] w-full">
-          <AuthInterceptor />
-          {children}
-        </div>
+        {/* Global providers wrap kiye hain taaki recording aur audio persist kare[cite: 10] */}
+        <GlobalAudioProvider>
+          <GlobalRecordingProvider>
+            <div className="h-[100dvh] w-full">
+              <AuthInterceptor />
+              {children}
+            </div>
+          </GlobalRecordingProvider>
+        </GlobalAudioProvider>
       </body>
     </html>
   );

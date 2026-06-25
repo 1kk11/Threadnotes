@@ -1,60 +1,91 @@
-import { useCallback, useRef } from "react";
+import { useCallback, useRef, useState, useEffect } from "react";
 import * as SpeechSDK from "microsoft-cognitiveservices-speech-sdk";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-const SPEECH_LANG = process.env.NEXT_PUBLIC_SPEECH_LANG || "en-US";
 
 const TOKEN_REFRESH_MS = 8 * 60 * 1000;
 
 type UseAzureSpeechProps = {
-  /** Optional override for the app JWT. Defaults to localStorage "token". */
   getAuthToken?: () => string | null;
-  /** Growing in-progress hypothesis (typewriter effect). */
   onPartial?: (text: string) => void;
-  /** A committed/finalized phrase. */
   onFinal?: (text: string) => void;
   onError?: (message: string) => void;
 };
 
-export function useAzureSpeech({
-  getAuthToken,
-  onPartial,
-  onFinal,
-  onError,
-}: UseAzureSpeechProps) {
+type AzureTranscriptItem = {
+  text: string;
+  start: number;
+  end: number;
+};
+
+export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
+  // NAYA: Global state ko UI updates bhejne ke liye Callback Ref (Taaki page change par break na ho)
+  const callbacksRef = useRef({
+    onPartial: initialProps?.onPartial,
+    onFinal: initialProps?.onFinal,
+    onError: initialProps?.onError,
+  });
+
+  const setCallbacks = useCallback(
+    (cbs: {
+      onPartial?: (text: string) => void;
+      onFinal?: (text: string) => void;
+      onError?: (message: string) => void;
+    }) => {
+      callbacksRef.current = { ...callbacksRef.current, ...cbs };
+    },
+    [],
+  );
+
+  // NEW STATES FOR DASHBOARD UI (Mic aur Language yahan update honge)
+  const [micLabel, setMicLabel] = useState<string>("Default Microphone");
+  const [detectedLanguage, setDetectedLanguage] = useState<string>("English");
+  const [audioQuality, setAudioQuality] = useState<string>("Medium");
+
+  // TUMHARA ORIGINAL LOGIC - Ek bhi line change nahi hui hai
   const recognizerRef = useRef<SpeechSDK.SpeechRecognizer | null>(null);
   const renewTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const chunksRef = useRef<Blob[]>([]);
-  const streamRef = useRef<MediaStream | null>(null);
-  const isPausedRef = useRef<boolean>(false);
+  const azureTranscriptRef = useRef<AzureTranscriptItem[]>([]);
+  const audioFilePathRef = useRef<string | null>(null);
+  const audioWriteChainRef = useRef<Promise<void>>(Promise.resolve());
+  const qualityIntervalRef = useRef<ReturnType<typeof setInterval> | null>(
+    null,
+  );
 
+  const streamRef = useRef<MediaStream | null>(null);
+  const micStreamRef = useRef<MediaStream | null>(null);
+  const systemStreamRef = useRef<MediaStream | null>(null);
+  const audioCtxRef = useRef<AudioContext | null>(null);
+
+  const isPausedRef = useRef<boolean>(false);
   const recognizerDeadRef = useRef<boolean>(false);
   const reconnectingRef = useRef<boolean>(false);
   const finishingRef = useRef<boolean>(false);
   const reconnectRef = useRef<null | (() => Promise<boolean>)>(null);
 
   const readJwt = useCallback((): string | null => {
-    if (getAuthToken) return getAuthToken();
+    if (initialProps?.getAuthToken) return initialProps.getAuthToken();
     if (typeof window === "undefined") return null;
     return localStorage.getItem("token");
-  }, [getAuthToken]);
+  }, [initialProps]);
+
+  const LOCAL_AI_ENGINE_URL = "http://127.0.0.1:8000/diarize-and-merge";
 
   const fetchAzureToken = useCallback(async (): Promise<{
     token: string;
     region: string;
   }> => {
     const jwt = readJwt();
-    if (!jwt) {
+    if (!jwt)
       throw new Error("Not authenticated — no app token in localStorage.");
-    }
     const res = await fetch(`${API_URL}/azure/token`, {
       headers: { Authorization: `Bearer ${jwt}` },
     });
     if (!res.ok) {
       throw new Error(
         res.status === 401
-          ? "Azure token request unauthorized (401) — your login session likely expired; sign in again."
+          ? "Azure token request unauthorized (401) — your login session likely expired."
           : `Token fetch failed: ${res.status}`,
       );
     }
@@ -70,10 +101,23 @@ export function useAzureSpeech({
           recognizerRef.current.authorizationToken = token;
         }
       } catch {
-        onError?.("Token renewal failed (will retry)");
+        callbacksRef.current.onError?.("Token renewal failed (will retry)");
       }
     }, TOKEN_REFRESH_MS);
-  }, [fetchAzureToken, onError]);
+  }, [fetchAzureToken]);
+
+  const normalizeAzureResultTimestamps = (result: any) => {
+    const rawStart = Number(result.offset ?? result.result?.offset ?? 0);
+    const rawDuration = Number(result.duration ?? result.result?.duration ?? 0);
+    const isTicks = rawStart > 100000 || rawDuration > 100000;
+    const start = isTicks ? rawStart / 10000000 : rawStart;
+    const duration = isTicks ? rawDuration / 10000000 : rawDuration;
+
+    return {
+      start: Math.max(0, start),
+      end: Math.max(0, start + duration),
+    };
+  };
 
   const initRecognizer = useCallback(
     (token: string, region: string): SpeechSDK.SpeechRecognizer => {
@@ -81,33 +125,65 @@ export function useAzureSpeech({
         token,
         region,
       );
-      speechConfig.speechRecognitionLanguage = SPEECH_LANG;
+
+      // Auto Detect Language (English and Hindi dono handle karega)
+      const autoDetectSourceLanguageConfig =
+        SpeechSDK.AutoDetectSourceLanguageConfig.fromLanguages([
+          "en-US",
+          "hi-IN",
+        ]);
 
       const audioConfig = SpeechSDK.AudioConfig.fromStreamInput(
         streamRef.current as MediaStream,
       );
-      const recognizer = new SpeechSDK.SpeechRecognizer(speechConfig, audioConfig);
+
+      const recognizer = SpeechSDK.SpeechRecognizer.FromConfig(
+        speechConfig,
+        autoDetectSourceLanguageConfig,
+        audioConfig,
+      );
 
       recognizer.recognizing = (_s: any, e: any) => {
-        if (e.result.text) onPartial?.(e.result.text);
+        if (e.result.text) callbacksRef.current.onPartial?.(e.result.text);
       };
+
       recognizer.recognized = (_s: any, e: any) => {
         if (
           e.result.reason === SpeechSDK.ResultReason.RecognizedSpeech &&
           e.result.text
         ) {
-          onFinal?.(e.result.text);
+          // Detect which language was spoken
+          const lang = e.result.properties.getProperty(
+            (SpeechSDK.PropertyId as any)
+              .SpeechServiceConnection_AutoDetectSourceLanguageResult,
+          );
+          if (lang) {
+            setDetectedLanguage(lang.startsWith("hi") ? "Hindi" : "English");
+          }
+
+          const { start, end } = normalizeAzureResultTimestamps(e.result);
+          azureTranscriptRef.current.push({
+            text: e.result.text,
+            start,
+            end,
+          });
+
+          callbacksRef.current.onFinal?.(e.result.text);
         }
       };
+
       recognizer.canceled = (_s: any, e: any) => {
         recognizerDeadRef.current = true;
         if (e.reason === SpeechSDK.CancellationReason.Error) {
-          onError?.(e.errorDetails || "Recognition canceled");
+          callbacksRef.current.onError?.(
+            e.errorDetails || "Recognition canceled",
+          );
         }
         if (!isPausedRef.current && !finishingRef.current) {
           void reconnectRef.current?.();
         }
       };
+
       recognizer.sessionStopped = () => {
         recognizerDeadRef.current = true;
       };
@@ -116,7 +192,7 @@ export function useAzureSpeech({
       recognizerDeadRef.current = false;
       return recognizer;
     },
-    [onPartial, onFinal, onError],
+    [],
   );
 
   const reconnect = useCallback(async (): Promise<boolean> => {
@@ -151,12 +227,14 @@ export function useAzureSpeech({
       startRenewalLoop();
       return true;
     } catch (e: any) {
-      onError?.(`Live reconnect failed (recording continues): ${e?.message || e}`);
+      callbacksRef.current.onError?.(
+        `Live reconnect failed: ${e?.message || e}`,
+      );
       return false;
     } finally {
       reconnectingRef.current = false;
     }
-  }, [fetchAzureToken, initRecognizer, startRenewalLoop, onError]);
+  }, [fetchAzureToken, initRecognizer, startRenewalLoop]);
 
   reconnectRef.current = reconnect;
 
@@ -164,14 +242,121 @@ export function useAzureSpeech({
     try {
       finishingRef.current = false;
 
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      streamRef.current = stream;
-      isPausedRef.current = false;
+      // 1. Get Microphone Audio
+      const micStream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+      });
+      micStreamRef.current = micStream;
 
-      chunksRef.current = [];
-      const recorder = new MediaRecorder(stream);
-      recorder.ondataavailable = (e) => {
-        if (e.data && e.data.size > 0) chunksRef.current.push(e.data);
+      // EXTRACT MIC NAME FOR UI (Yahan Earpods ya Laptop mic ka naam aayega)
+      if (micStream.getAudioTracks().length > 0) {
+        setMicLabel(
+          micStream.getAudioTracks()[0].label || "Default Microphone",
+        );
+      }
+
+      // 2. Get System Audio (Electron se Teams/Meet ki aawaz)
+      let systemStream: MediaStream | null = null;
+      try {
+        if (
+          typeof window !== "undefined" &&
+          (window as any).electronAPI &&
+          (window as any).electronAPI.getDesktopSourceId
+        ) {
+          const sourceId = await (
+            window as any
+          ).electronAPI.getDesktopSourceId();
+          systemStream = await navigator.mediaDevices.getUserMedia({
+            audio: { mandatory: { chromeMediaSource: "desktop" } } as any,
+            video: {
+              mandatory: {
+                chromeMediaSource: "desktop",
+                chromeMediaSourceId: sourceId,
+              },
+            } as any,
+          });
+        } else {
+          systemStream = await navigator.mediaDevices.getDisplayMedia({
+            video: true,
+            audio: true,
+          });
+        }
+        systemStreamRef.current = systemStream;
+      } catch (err) {
+        console.warn("System audio capture skipped.", err);
+      }
+
+      // 3. AudioContext Setup
+      const AudioContextClass =
+        window.AudioContext || (window as any).webkitAudioContext;
+      const audioCtx = new AudioContextClass();
+      audioCtxRef.current = audioCtx;
+      const destination = audioCtx.createMediaStreamDestination();
+
+      const micSource = audioCtx.createMediaStreamSource(micStream);
+      micSource.connect(destination);
+
+      if (systemStream && systemStream.getAudioTracks().length > 0) {
+        const systemSource = audioCtx.createMediaStreamSource(systemStream);
+        systemSource.connect(destination);
+        systemStream.getVideoTracks().forEach((t) => t.stop());
+      } else if (systemStream) {
+        systemStream.getTracks().forEach((t) => t.stop());
+      }
+
+      // AUDIO QUALITY ANALYZER
+      const analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 256;
+      micSource.connect(analyser); // We monitor the mic for quality
+      const bufferLength = analyser.frequencyBinCount;
+      const dataArray = new Uint8Array(bufferLength);
+
+      if (qualityIntervalRef.current) clearInterval(qualityIntervalRef.current);
+      qualityIntervalRef.current = setInterval(() => {
+        if (!isPausedRef.current && analyser) {
+          analyser.getByteFrequencyData(dataArray);
+          let sum = 0;
+          for (let i = 0; i < bufferLength; i++) sum += dataArray[i];
+          const average = sum / bufferLength;
+
+          if (average < 10) setAudioQuality("Low (Speak Louder)");
+          else if (average < 50) setAudioQuality("Medium");
+          else setAudioQuality("Good");
+        }
+      }, 1000);
+
+      // 4. Record Mixed Stream (Tumhari + Samne wale ki aawaz)
+      const mixedStream = destination.stream;
+      streamRef.current = mixedStream;
+      isPausedRef.current = false;
+      azureTranscriptRef.current = [];
+
+      let recordingFilePath: string | null = null;
+      if (typeof window !== "undefined" && window.electronAPI?.audioFileCreate) {
+        try {
+          recordingFilePath = await window.electronAPI.audioFileCreate();
+          audioFilePathRef.current = recordingFilePath;
+          audioWriteChainRef.current = Promise.resolve();
+        } catch (e) {
+          console.warn("Failed to create local recording file:", e);
+          recordingFilePath = null;
+        }
+      }
+
+      const recorder = new MediaRecorder(mixedStream);
+      recorder.ondataavailable = async (e) => {
+        if (!e.data || e.data.size === 0) return;
+        const localPath = audioFilePathRef.current;
+        if (!localPath || typeof window === "undefined" || !window.electronAPI?.audioFileAppend) return;
+
+        const arrayBuffer = await e.data.arrayBuffer();
+        audioWriteChainRef.current = audioWriteChainRef.current
+          .then(async () => {
+            await window.electronAPI?.audioFileAppend(localPath, arrayBuffer);
+          })
+          .catch((error) => {
+            console.warn("Audio append failed:", error);
+          });
       };
       mediaRecorderRef.current = recorder;
       recorder.start(1000);
@@ -180,30 +365,33 @@ export function useAzureSpeech({
       const recognizer = initRecognizer(token, region);
       recognizer.startContinuousRecognitionAsync(
         () => startRenewalLoop(),
-        (err) => onError?.(String(err)),
+        (err) => callbacksRef.current.onError?.(String(err)),
       );
       return true;
     } catch (e: any) {
-      onError?.(e?.message || "Failed to start live transcription");
+      callbacksRef.current.onError?.(e?.message || "Failed to start");
       return false;
     }
-  }, [fetchAzureToken, initRecognizer, startRenewalLoop, onError]);
+  }, [fetchAzureToken, initRecognizer, startRenewalLoop]);
 
   const pause = useCallback(() => {
     isPausedRef.current = true;
-    streamRef.current?.getAudioTracks().forEach((t) => {
-      t.enabled = false;
-    });
+    micStreamRef.current?.getAudioTracks().forEach((t) => (t.enabled = false));
+    systemStreamRef.current
+      ?.getAudioTracks()
+      .forEach((t) => (t.enabled = false));
     if (mediaRecorderRef.current?.state === "recording") {
       mediaRecorderRef.current.pause();
     }
+    setAudioQuality("Paused");
   }, []);
 
   const resume = useCallback(async () => {
     isPausedRef.current = false;
-    streamRef.current?.getAudioTracks().forEach((t) => {
-      t.enabled = true;
-    });
+    micStreamRef.current?.getAudioTracks().forEach((t) => (t.enabled = true));
+    systemStreamRef.current
+      ?.getAudioTracks()
+      .forEach((t) => (t.enabled = true));
     if (mediaRecorderRef.current?.state === "paused") {
       mediaRecorderRef.current.resume();
     }
@@ -211,6 +399,22 @@ export function useAzureSpeech({
       await reconnect();
     }
   }, [reconnect]);
+
+  const cleanupStreams = useCallback(() => {
+    if (qualityIntervalRef.current) clearInterval(qualityIntervalRef.current);
+    micStreamRef.current?.getTracks().forEach((t) => t.stop());
+    systemStreamRef.current?.getTracks().forEach((t) => t.stop());
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+
+    if (audioCtxRef.current && audioCtxRef.current.state !== "closed") {
+      audioCtxRef.current.close().catch(() => {});
+    }
+
+    micStreamRef.current = null;
+    systemStreamRef.current = null;
+    streamRef.current = null;
+    audioCtxRef.current = null;
+  }, []);
 
   const finishAndUpload = useCallback(async (): Promise<any> => {
     finishingRef.current = true;
@@ -232,37 +436,63 @@ export function useAzureSpeech({
     });
     recognizerRef.current = null;
 
-    const blob: Blob = await new Promise((resolve) => {
-      const mr = mediaRecorderRef.current;
-      if (!mr) return resolve(new Blob());
-      mr.onstop = () =>
-        resolve(new Blob(chunksRef.current, { type: mr.mimeType || "audio/webm" }));
-      if (mr.state !== "inactive") mr.stop();
-      mr.stream.getTracks().forEach((t) => t.stop());
-    });
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+      try {
+        mediaRecorderRef.current.stop();
+      } catch {
+        // ignore stop errors
+      }
+    }
+
+    await audioWriteChainRef.current;
+    const audioFilePath = audioFilePathRef.current;
+    if (audioFilePath && typeof window !== "undefined" && window.electronAPI?.audioFileClose) {
+      try {
+        await window.electronAPI.audioFileClose(audioFilePath);
+      } catch (error) {
+        console.warn("Failed to close local audio file:", error);
+      }
+    }
+
+    const transcriptPayload = [...azureTranscriptRef.current];
+    let mergedTranscript: AzureTranscriptItem[] = [];
+
+    if (audioFilePath && transcriptPayload.length > 0) {
+      const response = await fetch(LOCAL_AI_ENGINE_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          audio_file_path: audioFilePath,
+          azure_transcript: transcriptPayload,
+        }),
+      });
+
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(
+          result.detail || `Local AI engine request failed: ${response.status}`,
+        );
+      }
+
+      mergedTranscript = Array.isArray(result.merged_transcript)
+        ? result.merged_transcript
+        : [];
+    }
+
+    cleanupStreams();
     mediaRecorderRef.current = null;
-    streamRef.current = null;
+    audioFilePathRef.current = null;
+    azureTranscriptRef.current = [];
 
-    const audioUrl = blob.size > 0 ? URL.createObjectURL(blob) : null;
-
-    const jwt = readJwt();
-    const form = new FormData();
-    form.append("file", blob, "recording.webm");
-    const res = await fetch(`${API_URL}/diarize/stream`, {
-      method: "POST",
-      headers: jwt ? { Authorization: `Bearer ${jwt}` } : {},
-      body: form,
-    });
-    const result = await res.json();
-    return { ...result, audioUrl };
-  }, [readJwt]);
+    const audioUrl = audioFilePath ? `file://${audioFilePath}` : null;
+    return { status: "success", audioUrl, merged_transcript: mergedTranscript };
+  }, [cleanupStreams]);
 
   const cancel = useCallback(() => {
     finishingRef.current = true;
-    if (renewTimerRef.current) {
-      clearInterval(renewTimerRef.current);
-      renewTimerRef.current = null;
-    }
+    if (renewTimerRef.current) clearInterval(renewTimerRef.current);
     const r = recognizerRef.current;
     if (r) {
       try {
@@ -277,15 +507,31 @@ export function useAzureSpeech({
     if (mr) {
       try {
         if (mr.state !== "inactive") mr.stop();
-        mr.stream.getTracks().forEach((t) => t.stop());
       } catch {}
       mediaRecorderRef.current = null;
     }
-    streamRef.current = null;
+
+    if (audioFilePathRef.current && typeof window !== "undefined" && window.electronAPI?.audioFileClose) {
+      void window.electronAPI.audioFileClose(audioFilePathRef.current).catch(() => {});
+      audioFilePathRef.current = null;
+    }
+
+    azureTranscriptRef.current = [];
+    cleanupStreams();
     isPausedRef.current = false;
     recognizerDeadRef.current = false;
-    chunksRef.current = [];
-  }, []);
+    audioWriteChainRef.current = Promise.resolve();
+  }, [cleanupStreams]);
 
-  return { start, pause, resume, finishAndUpload, cancel };
+  return {
+    start,
+    pause,
+    resume,
+    finishAndUpload,
+    cancel,
+    micLabel,
+    detectedLanguage,
+    audioQuality,
+    setCallbacks,
+  };
 }

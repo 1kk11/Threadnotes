@@ -7,6 +7,13 @@ declare global {
       content: string,
       defaultName: string,
     ) => Promise<{ saved: boolean; filePath?: string }>;
+    getDesktopSourceId: () => Promise<string>;
+    audioFileCreate: () => Promise<string>;
+    audioFileAppend: (
+      filePath: string,
+      chunk: ArrayBuffer,
+    ) => Promise<boolean>;
+    audioFileClose: (filePath: string) => Promise<boolean>;
   }
 
   interface Window {

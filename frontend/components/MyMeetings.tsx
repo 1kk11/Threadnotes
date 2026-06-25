@@ -2,7 +2,7 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import Calendar from "react-calendar";
 import "react-calendar/dist/Calendar.css";
-import { Share2 } from "lucide-react";
+import { Download } from "lucide-react"; // FIX: Share2 replaced with Download
 import { loadMeetings, saveMeetings, MEETINGS_EVENT } from "@/lib/meetingStore";
 
 type TranscriptEntry = { speaker: string; text: string; timestamp: string };
@@ -64,24 +64,22 @@ export default function MyMeetings() {
     }
   };
 
-  const handleShare = async (meeting: Meeting) => {
+  // FIX: New Export Logic for downloading .txt file
+  const handleExport = (meeting: Meeting) => {
     const formattedDate = new Date(meeting.date).toLocaleString();
     const body = meeting.transcript
       .map((t) => `${t.speaker}: ${t.text}`)
       .join("\n\n");
-    const shareText = `${meeting.topic}\n${formattedDate}\n\n${body}`;
+    const exportText = `${meeting.topic}\n${formattedDate}\n\n${body}`;
 
-    if (navigator.share) {
-      try {
-        await navigator.share({ title: meeting.topic, text: shareText });
-        return;
-      } catch (err) {
-        if ((err as DOMException)?.name === "AbortError") return;
-      }
-    }
-
-    const copied = await copyToClipboard(shareText);
-    showToast(copied ? "Copied to clipboard" : "Could not copy transcript");
+    const blob = new Blob([exportText], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${meeting.topic.replace(/[^a-z0-9]/gi, "_")}_Transcript.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast("Exporting transcript...");
   };
 
   const loadLocalMeetings = () => setMeetings(loadMeetings());
@@ -370,13 +368,14 @@ export default function MyMeetings() {
                 {selectedMeeting.topic}
               </h2>
               <div className="flex items-center gap-1">
+                {/* FIX: Calling handleExport and showing Download Icon */}
                 <button
-                  onClick={() => handleShare(selectedMeeting)}
+                  onClick={() => handleExport(selectedMeeting)}
                   className="p-2 text-white/80 hover:bg-white/20 hover:text-white rounded-full transition-colors"
-                  title="Share transcript"
-                  aria-label="Share transcript"
+                  title="Export transcript"
+                  aria-label="Export transcript"
                 >
-                  <Share2 className="w-5 h-5" />
+                  <Download className="w-5 h-5" />
                 </button>
                 <button
                   onClick={() => setSelectedMeeting(null)}
