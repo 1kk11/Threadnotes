@@ -9,6 +9,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
     saveTranscript: (content, defaultName) =>
         ipcRenderer.invoke("save-transcript", { content, defaultName }),
+    saveTranscriptLocal: (data, baseName, extension) =>
+        ipcRenderer.invoke("save-transcript-local", { data, baseName, extension }),
     getDesktopSourceId: () => ipcRenderer.invoke("get-desktop-source-id"),
     audioFileCreate: () => ipcRenderer.invoke("audio-file-create"),
     audioFileAppend: (filePath, chunk) =>

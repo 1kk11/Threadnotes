@@ -64,24 +64,6 @@ def get_users_container():
     return _users_cont
 
 
-TRANSCRIPTS_CONTAINER = os.getenv("COSMOS_TRANSCRIPTS_CONTAINER", "transcripts")
-_transcripts_cont = None
-
-
-def get_transcripts_container():
-    global _transcripts_cont
-    if _transcripts_cont is None:
-        if not COSMOS_ENDPOINT or not COSMOS_KEY or not DATABASE_NAME:
-            raise HTTPException(status_code=500, detail="Cosmos DB configuration is missing.")
-        client = CosmosClient(COSMOS_ENDPOINT, COSMOS_KEY)
-        database = client.get_database_client(DATABASE_NAME)
-        _transcripts_cont = database.create_container_if_not_exists(
-            id=TRANSCRIPTS_CONTAINER,
-            partition_key=PartitionKey(path="/userId"),
-        )
-    return _transcripts_cont
-
-
 def build_openai_client():
     from openai import OpenAI, AzureOpenAI
 
@@ -330,6 +312,18 @@ async def get_azure_speech_token(user: dict = Depends(get_current_user)):
     return {"token": response.text, "region": AZURE_SPEECH_REGION}
 
 
+DIARIZATION_PROMPT = (
+    "Be highly conservative with speaker identification. "
+    "DO NOT create new speakers for background noise, breaths, coughs, "
+    "laughter, music, or slight vocal variations (pitch, volume, or tone changes). "
+    "Only introduce a new speaker when you hear a clearly distinct human voice. "
+    "If there are clearly only 2 distinct voices, strictly output only "
+    "'Speaker 1' and 'Speaker 2' and never invent a third speaker. "
+    "Prefer assigning ambiguous or noisy segments to the nearest existing speaker "
+    "rather than creating an additional one."
+)
+
+
 def _run_diarization(audio_bytes: bytes, filename: str, content_type: str = "") -> list:
     client = build_openai_client()
     deployment = os.getenv("AZURE_DIARIZE_DEPLOYMENT", "gpt-4o-transcribe-diarize").strip()
@@ -341,6 +335,7 @@ def _run_diarization(audio_bytes: bytes, filename: str, content_type: str = "") 
         model=deployment,
         file=(safe_name, audio_bytes, mime),
         response_format="diarized_json",
+        prompt=DIARIZATION_PROMPT,
         extra_body={"chunking_strategy": "auto"},
     )
     data = (
@@ -374,23 +369,6 @@ def _run_diarization(audio_bytes: bytes, filename: str, content_type: str = "") 
     return segments
 
 
-def _save_transcript(user_id: str, segments: list) -> str:
-    try:
-        container = get_transcripts_container()
-        doc_id = str(uuid.uuid4())
-        container.upsert_item(
-            {
-                "id": doc_id,
-                "userId": user_id,
-                "createdAt": datetime.now(timezone.utc).isoformat(),
-                "segments": segments,
-            }
-        )
-        return doc_id
-    except Exception:
-        return ""
-
-
 @app.post("/diarize/stream")
 async def diarize_stream(
     file: UploadFile = File(...),
@@ -411,10 +389,11 @@ async def diarize_stream(
     except Exception as exc:
         return {"status": "error", "message": str(exc)}
 
-    doc_id = _save_transcript(user.get("sub", "unknown"), segments)
+    # Cloud Vault is a stateless proxy for the OpenAI/Azure diarization call only.
+    # Transcripts are NEVER persisted in Cosmos DB — the renderer saves them to the
+    # user's local PC. Cosmos DB is reserved exclusively for login credentials.
     return {
         "status": "success",
-        "id": doc_id,
         "segments": segments,
         "merged_transcript": segments,
     }

@@ -71,6 +71,7 @@ export default function Dashboard() {
   const [showPlayback, setShowPlayback] = useState(false);
   const [mergedTranscript, setMergedTranscript] = useState<MergedTranscriptRow[]>([]);
   const [isDiarizing, setIsDiarizing] = useState(false);
+  const [currentAudioTime, setCurrentAudioTime] = useState(0);
 
   const [showFinishModal, setShowFinishModal] = useState(false);
   const [showNewConvoModal, setShowNewConvoModal] = useState(false);
@@ -171,12 +172,32 @@ export default function Dashboard() {
     return () => window.removeEventListener(MEETINGS_EVENT, read);
   }, [view]);
 
+  const saveTranscriptLocally = useCallback(
+    async (rows: MergedTranscriptRow[]) => {
+      if (!rows.length) return;
+      const electron =
+        typeof window !== "undefined" ? window.electronAPI : undefined;
+      if (!electron?.saveTranscriptLocal) return;
+      try {
+        const payload = {
+          createdAt: new Date().toISOString(),
+          merged_transcript: rows,
+        };
+        await electron.saveTranscriptLocal(payload, "ThreadNotes-Transcript");
+      } catch (e) {
+        console.warn("Local transcript save failed:", e);
+      }
+    },
+    [],
+  );
+
   const clearPlayback = useCallback(() => {
     setSegments([]);
     setMergedTranscript([]);
     setShowPlayback(false);
+    setCurrentAudioTime(0);
     setAudioUrl((prev) => {
-      if (prev) URL.revokeObjectURL(prev);
+      if (prev && prev.startsWith("blob:")) URL.revokeObjectURL(prev);
       return null;
     });
   }, []);
@@ -226,16 +247,19 @@ export default function Dashboard() {
       const result = await finishAndUpload();
       if (sid !== sessionIdRef.current) return;
       if (result?.audioUrl) {
+        setCurrentAudioTime(0);
         setAudioUrl((prev) => {
-          if (prev) URL.revokeObjectURL(prev);
+          if (prev && prev.startsWith("blob:")) URL.revokeObjectURL(prev);
           return result.audioUrl;
         });
       }
       if (Array.isArray(result?.merged_transcript)) {
-        setMergedTranscript(result.merged_transcript as MergedTranscriptRow[]);
+        const rows = result.merged_transcript as MergedTranscriptRow[];
+        setMergedTranscript(rows);
         setLines([]);
         setInterim("");
         setShowPlayback(true);
+        void saveTranscriptLocally(rows);
       }
       setStatusMessage(
         result?.status === "success"
@@ -248,7 +272,7 @@ export default function Dashboard() {
     } finally {
       setIsDiarizing(false);
     }
-  }, [finishAndUpload, stopLiveEvents]);
+  }, [finishAndUpload, stopLiveEvents, saveTranscriptLocally]);
 
   const handleProcessUpload = useCallback(async () => {
     if (!uploadFile) return;
@@ -265,6 +289,12 @@ export default function Dashboard() {
       typeof window !== "undefined" ? window.electronAPI : undefined;
     const localPath = electron?.getPathForFile?.(uploadFile) || "";
 
+    const playbackUrl = localPath
+      ? `file://${localPath}`
+      : URL.createObjectURL(uploadFile);
+    setCurrentAudioTime(0);
+    setAudioUrl(playbackUrl);
+
     const finish = (rows: MergedTranscriptRow[], doneMsg: string) => {
       setUploadProgress(100);
       setTimeout(() => {
@@ -276,6 +306,7 @@ export default function Dashboard() {
           setLines([]);
           setStatusMessage("Analysis ready!");
           setActiveTab("live");
+          void saveTranscriptLocally(rows);
         } else {
           setStatusMessage(doneMsg);
         }
@@ -375,7 +406,7 @@ export default function Dashboard() {
       setUploadProgress(0);
       setStatusMessage(e?.message || "Could not process the file.");
     }
-  }, [uploadFile, clearPlayback]);
+  }, [uploadFile, clearPlayback, saveTranscriptLocally]);
 
   const handleSaveTranscript = useCallback(async () => {
     if (!transcriptText.trim() && segments.length === 0 && mergedTranscript.length === 0)
@@ -567,6 +598,16 @@ export default function Dashboard() {
                   </div>
                 ) : mergedTranscript.length > 0 ? (
                   <div className="flex min-h-[320px] flex-col rounded-3xl border border-slate-200 bg-white px-6 py-6 shadow-sm shadow-slate-200/60">
+                    {audioUrl && (
+                      <audio
+                        controls
+                        src={audioUrl}
+                        onTimeUpdate={(e) =>
+                          setCurrentAudioTime(e.currentTarget.currentTime)
+                        }
+                        className="w-full mb-4"
+                      />
+                    )}
                     <div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                       <div>
                         <h3 className="text-lg font-semibold text-slate-900">
@@ -618,10 +659,18 @@ export default function Dashboard() {
                         const styleClass =
                           colorClasses[speakerIndex % colorClasses.length];
 
+                        const isHighlighted =
+                          currentAudioTime >= item.start &&
+                          currentAudioTime <= item.end;
+
                         return (
                           <div
                             key={`${item.speaker}-${item.start}-${index}`}
-                            className={`rounded-3xl border px-5 py-4 shadow-sm ${styleClass}`}
+                            className={`rounded-3xl border px-5 py-4 shadow-sm transition-colors duration-200 ${
+                              isHighlighted
+                                ? "bg-indigo-50 border-indigo-200 ring-2 ring-indigo-200"
+                                : styleClass
+                            }`}
                           >
                             <div className="flex flex-wrap items-center gap-3">
                               <div className="inline-flex h-10 w-10 items-center justify-center rounded-2xl bg-white/90 text-sm font-semibold text-slate-900 shadow-sm">

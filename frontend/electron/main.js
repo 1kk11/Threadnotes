@@ -189,6 +189,35 @@ ipcMain.handle("save-transcript", async(_event, { content, defaultName }) => {
     return { saved: true, filePath };
 });
 
+function getLocalTranscriptsDirectory() {
+    const dir = path.join(app.getPath("documents"), "ThreadNotes");
+    fs.mkdirSync(dir, { recursive: true });
+    return dir;
+}
+
+// Persist the diarized transcript to the user's local PC. The Cloud Vault is a
+// stateless proxy and never stores transcripts — this is the only place they live.
+ipcMain.handle("save-transcript-local", async(_event, payload = {}) => {
+    const dir = getLocalTranscriptsDirectory();
+
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const rawBase = (payload.baseName || "ThreadNotes-Transcript")
+        .toString()
+        .replace(/[^\w.-]+/g, "_")
+        .slice(0, 80);
+
+    const data = payload.data ?? payload;
+    const asText = typeof data === "string";
+    const ext = asText ? (payload.extension || "txt") : "json";
+    const fileName = `${rawBase}-${stamp}.${ext}`;
+    const filePath = path.join(dir, fileName);
+
+    const contents = asText ? data : JSON.stringify(data, null, 2);
+    await fs.promises.writeFile(filePath, contents, "utf-8");
+
+    return { saved: true, filePath };
+});
+
 ipcMain.handle("audio-file-create", async() => {
     const filePath = createRecordingFilePath();
     const writeStream = fs.createWriteStream(filePath, { flags: "a" });

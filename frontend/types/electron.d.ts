@@ -8,6 +8,11 @@ declare global {
       content: string,
       defaultName: string,
     ) => Promise<{ saved: boolean; filePath?: string }>;
+    saveTranscriptLocal: (
+      data: unknown,
+      baseName?: string,
+      extension?: string,
+    ) => Promise<{ saved: boolean; filePath?: string }>;
     getDesktopSourceId: () => Promise<string>;
     audioFileCreate: () => Promise<string>;
     audioFileAppend: (
