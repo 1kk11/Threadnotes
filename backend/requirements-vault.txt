@@ -3,4 +3,3 @@ uvicorn[standard]==0.38.0
 python-dotenv==1.0.1
 PyJWT==2.8.0
 httpx==0.24.1
-python-multipart==0.0.9
