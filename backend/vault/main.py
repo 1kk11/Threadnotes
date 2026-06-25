@@ -3,6 +3,7 @@ import asyncio
 import json
 import os
 import random
+import re
 import smtplib
 import uuid
 from email.mime.text import MIMEText
@@ -324,6 +325,29 @@ DIARIZATION_PROMPT = (
 )
 
 
+_NOISE_ANNOTATION = re.compile(
+    r"^[\(\[\*]?\s*(breath|breathing|inhale|exhale|cough|sneeze|click|"
+    r"clicks|noise|static|silence|music|laughter|laughs?|sigh)\s*[\)\]\*]?$",
+    re.IGNORECASE,
+)
+
+
+def _is_noise_fragment(text: str) -> bool:
+    """Heuristic: True for non-verbal noise that should not create a speaker.
+
+    Catches (a) explicit non-verbal annotations like "(breath)" / "[cough]",
+    and (b) fragments that carry no real characters — e.g. punctuation-only
+    "...", "*" clicks, or "--". Uses Unicode-aware ``str.isalnum`` so genuine
+    short words in any script (English "Hi"/"No", Hindi, etc.) pass through.
+    """
+    t = text.strip()
+    if _NOISE_ANNOTATION.match(t):
+        return True
+    if not any(ch.isalnum() for ch in t):
+        return True
+    return False
+
+
 def _run_diarization(audio_bytes: bytes, filename: str, content_type: str = "") -> list:
     client = build_openai_client()
     deployment = os.getenv("AZURE_DIARIZE_DEPLOYMENT", "gpt-4o-transcribe-diarize").strip()
@@ -349,7 +373,13 @@ def _run_diarization(audio_bytes: bytes, filename: str, content_type: str = "") 
         text = (seg.get("text") or "").strip()
         if not text:
             continue
+        # Noise filter: don't let short non-verbal fragments (breaths, clicks,
+        # "(breath)", "*", "...", etc.) spawn a brand-new speaker. We skip the
+        # segment entirely so it neither adds clutter nor inflates the count.
+        if _is_noise_fragment(text):
+            continue
         raw = str(seg.get("speaker", "") or "").strip() or "unknown"
+        # No speaker cap — register as many distinct speakers as the model hears.
         if raw not in speaker_map:
             speaker_map[raw] = f"Speaker {len(speaker_map) + 1}"
         label = speaker_map[raw]
@@ -358,7 +388,7 @@ def _run_diarization(audio_bytes: bytes, filename: str, content_type: str = "") 
         segments.append(
             {
                 "type": "transcript",
-                "text": f"[{label}] {text}",
+                "text": f"{text}",
                 "speaker": label,
                 "start": round(start, 3),
                 "end": round(end, 3),

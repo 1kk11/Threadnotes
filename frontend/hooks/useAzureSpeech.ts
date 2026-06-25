@@ -491,6 +491,13 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
             ...s,
             start: (Number(s.start) || 0) + offset,
             end: (Number(s.end) || 0) + offset,
+            words: Array.isArray(s.words)
+              ? s.words.map((w: any) => ({
+                  ...w,
+                  start: (Number(w.start) || 0) + offset,
+                  end: (Number(w.end) || 0) + offset,
+                }))
+              : s.words,
           });
         }
       }

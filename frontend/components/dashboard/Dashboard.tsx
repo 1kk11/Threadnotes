@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { Plus } from "lucide-react";
+import { Plus, Pencil, Check, Upload } from "lucide-react";
 import { useGlobalRecording } from "@/components/GlobalRecordingProvider";
 import MyMeetings from "@/components/MyMeetings";
 import Sidebar, { type DashboardView } from "./Sidebar";
@@ -16,17 +16,33 @@ import {
 import { getUserName, clearSession } from "@/lib/auth";
 import ConfirmModal from "@/components/ui/ConfirmModal";
 
+type TranscriptWord = {
+  word: string;
+  start: number;
+  end: number;
+};
+
 type MergedTranscriptRow = {
   speaker: string;
   text: string;
   start: number;
   end: number;
+  words?: TranscriptWord[];
 };
 
 export type CaptureTab = "live" | "upload";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 const stripSpeakerPrefix = (text: string) => text.replace(/^\[.*?\]\s*/, "");
+
+const SPEAKER_PALETTE = [
+  "text-indigo-600",
+  "text-orange-500",
+  "text-emerald-600",
+  "text-rose-500",
+  "text-violet-600",
+  "text-amber-600",
+];
 
 function formatTime(totalSeconds: number) {
   const h = Math.floor(totalSeconds / 3600);
@@ -72,6 +88,9 @@ export default function Dashboard() {
   const [mergedTranscript, setMergedTranscript] = useState<MergedTranscriptRow[]>([]);
   const [isDiarizing, setIsDiarizing] = useState(false);
   const [currentAudioTime, setCurrentAudioTime] = useState(0);
+  const [mergedEditMode, setMergedEditMode] = useState(false);
+  const [mergedDraft, setMergedDraft] = useState("");
+  const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const [showFinishModal, setShowFinishModal] = useState(false);
   const [showNewConvoModal, setShowNewConvoModal] = useState(false);
@@ -191,7 +210,65 @@ export default function Dashboard() {
     [],
   );
 
+  const mergedPlainText = useMemo(
+    () =>
+      mergedTranscript
+        .map((r) => `${r.speaker}: ${stripSpeakerPrefix(r.text)}`)
+        .join("\n\n"),
+    [mergedTranscript],
+  );
+
+  const speakerColors = useMemo(() => {
+    const map: Record<string, string> = {};
+    mergedTranscript.forEach((r) => {
+      if (!(r.speaker in map)) {
+        map[r.speaker] =
+          SPEAKER_PALETTE[Object.keys(map).length % SPEAKER_PALETTE.length];
+      }
+    });
+    return map;
+  }, [mergedTranscript]);
+
+  // When a new transcript loads, reset the audio element to the start so the
+  // sync highlighting lines up with the freshly-loaded source.
+  useEffect(() => {
+    if (mergedTranscript.length === 0) return;
+    setCurrentAudioTime(0);
+    const el = audioRef.current;
+    if (el) {
+      el.currentTime = 0;
+      el.load();
+    }
+  }, [mergedTranscript, audioUrl]);
+
+  const toggleMergedEdit = useCallback(() => {
+    setMergedEditMode((on) => {
+      if (!on) {
+        setMergedDraft(mergedPlainText);
+        return true;
+      }
+      // Commit edits back onto the rows, preserving timestamps so highlighting
+      // keeps working. Only applied when the paragraph count still maps 1:1.
+      const paras = mergedDraft
+        .split(/\n{2,}/)
+        .map((p) => p.trim())
+        .filter(Boolean);
+      if (paras.length === mergedTranscript.length) {
+        setMergedTranscript((prev) =>
+          prev.map((row, i) => {
+            const p = paras[i];
+            const colon = p.indexOf(":");
+            const text = colon >= 0 ? p.slice(colon + 1).trim() : p;
+            return { ...row, text };
+          }),
+        );
+      }
+      return false;
+    });
+  }, [mergedDraft, mergedPlainText, mergedTranscript.length]);
+
   const clearPlayback = useCallback(() => {
+    setMergedEditMode(false);
     setSegments([]);
     setMergedTranscript([]);
     setShowPlayback(false);
@@ -362,6 +439,11 @@ export default function Dashboard() {
               ...s,
               start: (Number(s.start) || 0) + offset,
               end: (Number(s.end) || 0) + offset,
+              words: s.words?.map((w) => ({
+                ...w,
+                start: (Number(w.start) || 0) + offset,
+                end: (Number(w.end) || 0) + offset,
+              })),
             });
           }
           setUploadProgress(40 + Math.round(((i + 1) / chunks.length) * 55));
@@ -597,100 +679,113 @@ export default function Dashboard() {
                     </p>
                   </div>
                 ) : mergedTranscript.length > 0 ? (
-                  <div className="flex min-h-[320px] flex-col rounded-3xl border border-slate-200 bg-white px-6 py-6 shadow-sm shadow-slate-200/60">
-                    {audioUrl && (
-                      <audio
-                        controls
-                        src={audioUrl}
-                        onTimeUpdate={(e) =>
-                          setCurrentAudioTime(e.currentTarget.currentTime)
-                        }
-                        className="w-full mb-4"
-                      />
-                    )}
-                    <div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-                      <div>
-                        <h3 className="text-lg font-semibold text-slate-900">
-                          Speaker-labeled Transcript
-                        </h3>
-                        <p className="mt-1 text-sm text-slate-500">
-                          Final transcript merged with local speaker diarization.
+                  <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-white/60 bg-white/60 shadow-[0_8px_30px_rgb(0,0,0,0.06)] backdrop-blur-xl">
+                    <div className="flex items-center justify-between bg-linear-to-r from-violet-500 to-blue-500 px-6 py-4">
+                      <h3 className="text-base font-bold text-white">
+                        Playback &amp; Transcript
+                      </h3>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={toggleMergedEdit}
+                          className="flex items-center gap-2 rounded-lg bg-white/20 px-3.5 py-2 text-sm font-semibold text-white ring-1 ring-white/30 transition-colors hover:bg-white/30"
+                        >
+                          {mergedEditMode ? (
+                            <>
+                              <Check className="h-4 w-4" /> Done
+                            </>
+                          ) : (
+                            <>
+                              <Pencil className="h-4 w-4" /> Edit
+                            </>
+                          )}
+                        </button>
+                        <button
+                          onClick={handleSaveTranscript}
+                          disabled={mergedEditMode}
+                          className="flex items-center gap-2 rounded-lg bg-white/20 px-4 py-2 text-sm font-semibold text-white ring-1 ring-white/30 transition-colors hover:bg-white/30 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          <Upload className="h-4 w-4" />
+                          Save
+                        </button>
+                      </div>
+                    </div>
+
+                    {audioUrl && !mergedEditMode && (
+                      <div className="shrink-0 border-b border-white/60 bg-white/40 px-6 py-4">
+                        <audio
+                          ref={audioRef}
+                          src={audioUrl}
+                          controls
+                          className="w-full accent-violet-500"
+                          onTimeUpdate={(e) =>
+                            setCurrentAudioTime(e.currentTarget.currentTime)
+                          }
+                          onSeeked={(e) =>
+                            setCurrentAudioTime(e.currentTarget.currentTime)
+                          }
+                        />
+                        <p className="mt-2 bg-linear-to-r from-indigo-500 to-blue-500 bg-clip-text text-[11px] font-semibold uppercase tracking-widest text-transparent">
+                          Play to highlight the transcript in sync
                         </p>
                       </div>
-                      <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold uppercase tracking-[0.24em] text-slate-600">
-                        {mergedTranscript.length} entries
-                      </span>
-                    </div>
-                    <div className="mb-4 grid gap-2 sm:grid-cols-2">
-                      {Array.from(
-                        new Set(mergedTranscript.map((item) => item.speaker)),
-                      ).map((speaker, index) => {
-                        const colorClasses = [
-                          "bg-slate-50 border-slate-200 text-slate-700",
-                          "bg-violet-50 border-violet-200 text-violet-800",
-                          "bg-emerald-50 border-emerald-200 text-emerald-800",
-                          "bg-amber-50 border-amber-200 text-amber-800",
-                          "bg-rose-50 border-rose-200 text-rose-800",
-                          "bg-cyan-50 border-cyan-200 text-cyan-800",
-                        ];
-                        const styleClass = colorClasses[index % colorClasses.length];
-                        return (
-                          <div
-                            key={speaker}
-                            className={`flex items-center gap-3 rounded-2xl border px-3 py-2 text-xs font-semibold ${styleClass}`}
-                          >
-                            <span className="inline-flex h-2.5 w-2.5 rounded-full bg-slate-400" />
-                            <span>{speaker}</span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                    <div className="space-y-4 overflow-y-auto pr-2">
-                      {mergedTranscript.map((item, index) => {
-                        const speakerIndex = Number(item.speaker.replace(/[^0-9]/g, "")) - 1;
-                        const colorClasses = [
-                          "bg-slate-50 border-slate-200 text-slate-800",
-                          "bg-violet-50 border-violet-200 text-violet-900",
-                          "bg-emerald-50 border-emerald-200 text-emerald-900",
-                          "bg-amber-50 border-amber-200 text-amber-900",
-                          "bg-rose-50 border-rose-200 text-rose-900",
-                          "bg-cyan-50 border-cyan-200 text-cyan-900",
-                        ];
-                        const styleClass =
-                          colorClasses[speakerIndex % colorClasses.length];
+                    )}
 
-                        const isHighlighted =
-                          currentAudioTime >= item.start &&
-                          currentAudioTime <= item.end;
+                    <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto p-6">
+                      {mergedEditMode ? (
+                        <textarea
+                          value={mergedDraft}
+                          onChange={(e) => setMergedDraft(e.target.value)}
+                          placeholder="Edit the transcript..."
+                          className="h-full min-h-[300px] w-full resize-none rounded-xl border border-slate-200 bg-white/80 p-4 text-[15px] leading-relaxed text-slate-700 outline-none focus:ring-2 focus:ring-violet-500/40"
+                        />
+                      ) : (
+                        <div className="space-y-3">
+                          {mergedTranscript.map((item, index) => {
+                            const speakerColor =
+                              speakerColors[item.speaker] || "text-slate-700";
+                            const words = item.words ?? [];
 
-                        return (
-                          <div
-                            key={`${item.speaker}-${item.start}-${index}`}
-                            className={`rounded-3xl border px-5 py-4 shadow-sm transition-colors duration-200 ${
-                              isHighlighted
-                                ? "bg-indigo-50 border-indigo-200 ring-2 ring-indigo-200"
-                                : styleClass
-                            }`}
-                          >
-                            <div className="flex flex-wrap items-center gap-3">
-                              <div className="inline-flex h-10 w-10 items-center justify-center rounded-2xl bg-white/90 text-sm font-semibold text-slate-900 shadow-sm">
-                                {item.speaker.split(" ").map((word) => word[0]).join("")}
-                              </div>
-                              <div>
-                                <p className="text-sm font-semibold text-slate-900">
-                                  {item.speaker}
-                                </p>
-                                <p className="text-xs uppercase tracking-[0.18em] text-slate-500">
-                                  {formatTime(item.start)} – {formatTime(item.end)}
+                            return (
+                              <div
+                                key={`${item.speaker}-${item.start}-${index}`}
+                                className="rounded-xl border border-transparent bg-white/40 px-4 py-3"
+                              >
+                                <div className="mb-1 flex items-center justify-between gap-3">
+                                  <p
+                                    className={`text-sm font-bold ${speakerColor}`}
+                                  >
+                                    {item.speaker}
+                                  </p>
+                                  <p className="shrink-0 text-[11px] font-medium uppercase tracking-widest text-slate-400">
+                                    {formatTime(item.start)} – {formatTime(item.end)}
+                                  </p>
+                                </div>
+                                <p className="text-[15px] leading-relaxed text-slate-700">
+                                  {words.length > 0
+                                    ? words.map((w, wi) => {
+                                        const isActive =
+                                          currentAudioTime >= w.start &&
+                                          currentAudioTime < w.end;
+                                        return (
+                                          <span
+                                            key={wi}
+                                            className={
+                                              isActive
+                                                ? "text-indigo-600 font-bold transition-all"
+                                                : "transition-all"
+                                            }
+                                          >
+                                            {w.word}{" "}
+                                          </span>
+                                        );
+                                      })
+                                    : stripSpeakerPrefix(item.text)}
                                 </p>
                               </div>
-                            </div>
-                            <p className="mt-4 text-sm leading-7 text-slate-700">
-                              {stripSpeakerPrefix(item.text)}
-                            </p>
-                          </div>
-                        );
-                      })}
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
                   </div>
                 ) : (
