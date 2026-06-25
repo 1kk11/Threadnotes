@@ -335,7 +335,6 @@ def _run_diarization(audio_bytes: bytes, filename: str, content_type: str = "") 
         model=deployment,
         file=(safe_name, audio_bytes, mime),
         response_format="diarized_json",
-        prompt=DIARIZATION_PROMPT,
         extra_body={"chunking_strategy": "auto"},
     )
     data = (
