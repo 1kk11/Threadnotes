@@ -211,7 +211,7 @@ def _build_gmail_service():
     if not os.path.exists(GMAIL_TOKEN_PATH):
         raise HTTPException(
             status_code=500,
-            detail=f"Gmail token file not found at {GMAIL_TOKEN_PATH}.",
+            detail=f"Secret file not found at {GMAIL_TOKEN_PATH}",
         )
 
     from google.oauth2.credentials import Credentials
