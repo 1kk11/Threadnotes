@@ -1,11 +1,11 @@
 from datetime import datetime, timezone, timedelta
 import asyncio
+import base64
 import json
 import logging
 import os
 import re
 import secrets
-import smtplib
 import uuid
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -56,8 +56,10 @@ def _diagnose_env():
     """Log presence + length of critical env vars at startup. Never logs the
     actual secret values — only whether they're set and how long they are."""
     for key in (
-        "EMAIL_SENDER",
-        "EMAIL_PASSWORD",
+        "GOOGLE_CLIENT_ID",
+        "GOOGLE_CLIENT_SECRET",
+        "GOOGLE_REFRESH_TOKEN",
+        "GMAIL_SENDER",
         "JWT_SECRET",
         "COSMOS_ENDPOINT",
         "COSMOS_KEY",
@@ -173,27 +175,71 @@ def _generate_otp() -> str:
     return f"{secrets.randbelow(10**6):06d}"
 
 
+GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.send"]
+GOOGLE_TOKEN_URI = "https://oauth2.googleapis.com/token"
+_gmail_service = None
+
+
+def _build_gmail_service():
+    """Build an authenticated Gmail API client from env-var OAuth credentials.
+
+    Uses GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET / GOOGLE_REFRESH_TOKEN (a
+    long-lived refresh token minted once via the OAuth consent flow). Sends over
+    HTTPS via the Gmail API — no SMTP ports, so it works on Render where SMTP is
+    blocked. Imports are lazy so a missing google lib can't crash app startup.
+    """
+    client_id = os.getenv("GOOGLE_CLIENT_ID")
+    client_secret = os.getenv("GOOGLE_CLIENT_SECRET")
+    refresh_token = os.getenv("GOOGLE_REFRESH_TOKEN")
+    if not (client_id and client_secret and refresh_token):
+        raise HTTPException(
+            status_code=500,
+            detail="Google API email credentials are not configured.",
+        )
+
+    from google.oauth2.credentials import Credentials
+    from google.auth.transport.requests import Request
+    from googleapiclient.discovery import build
+
+    creds = Credentials(
+        token=None,
+        refresh_token=refresh_token,
+        client_id=client_id,
+        client_secret=client_secret,
+        token_uri=GOOGLE_TOKEN_URI,
+        scopes=GMAIL_SCOPES,
+    )
+    creds.refresh(Request())  # exchange the refresh token for an access token
+    return build("gmail", "v1", credentials=creds, cache_discovery=False)
+
+
+def _get_gmail_service():
+    """Cache the Gmail client; google-auth auto-refreshes the token on expiry."""
+    global _gmail_service
+    if _gmail_service is None:
+        _gmail_service = _build_gmail_service()
+    return _gmail_service
+
+
 def send_otp_email(target_email: str, otp: str, subject_prefix: str):
-    sender_email = os.getenv("EMAIL_SENDER")
-    sender_password = os.getenv("EMAIL_PASSWORD")
-    if not sender_email or not sender_password:
-        raise HTTPException(status_code=500, detail="Email configuration missing in backend")
+    service = _get_gmail_service()  # raises HTTP 500 if credentials are missing
 
     msg = MIMEMultipart()
-    msg["From"] = sender_email
+    sender = os.getenv("GMAIL_SENDER")
+    if sender:
+        msg["From"] = sender
     msg["To"] = target_email
     msg["Subject"] = f"ThreadNotes - {subject_prefix} OTP"
     body = f"Your OTP for {subject_prefix} is: {otp}\n\nPlease do not share this with anyone."
     msg.attach(MIMEText(body, "plain"))
 
+    raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
     try:
-        server = smtplib.SMTP("smtp.gmail.com", 587)
-        server.starttls()
-        server.login(sender_email, sender_password)
-        server.send_message(msg)
-        server.quit()
+        service.users().messages().send(userId="me", body={"raw": raw}).execute()
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to send email: {exc}")
+        raise HTTPException(
+            status_code=502, detail=f"Failed to send email via Gmail API: {exc}"
+        )
 
 
 def get_current_user(
