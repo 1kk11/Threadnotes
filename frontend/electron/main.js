@@ -31,10 +31,79 @@ function createRecordingFilePath() {
     return path.join(recordingsDir, fileName);
 }
 
+// Resolve a usable FFmpeg binary. Order of preference:
+//   1. ffmpeg-static (known-good binary; in a packaged asar it must be read
+//      from the unpacked dir — configured via "asarUnpack" in package.json).
+//   2. The binary shipped through electron-builder extraResources (fallback).
+//   3. Whatever "ffmpeg" is on PATH (last resort, e.g. dev machines).
+let _ffmpegPathCache = null;
+
 function getFfmpegPath() {
-    return app.isPackaged
+    if (_ffmpegPathCache) return _ffmpegPathCache;
+
+    let staticPath = null;
+    try {
+        staticPath = require("ffmpeg-static");
+    } catch (e) {
+        console.warn("[ffmpeg] ffmpeg-static not resolvable:", e.message);
+    }
+    if (staticPath) {
+        // Inside a packaged app the require() path points into app.asar, which
+        // is not executable; the real file lives in app.asar.unpacked.
+        const unpacked = staticPath.replace("app.asar", "app.asar.unpacked");
+        if (fs.existsSync(unpacked)) {
+            _ffmpegPathCache = unpacked;
+            return _ffmpegPathCache;
+        }
+        if (fs.existsSync(staticPath)) {
+            _ffmpegPathCache = staticPath;
+            return _ffmpegPathCache;
+        }
+    }
+
+    const bundled = app.isPackaged
         ? path.join(process.resourcesPath, "ffmpeg.exe")
         : path.join(__dirname, "..", "resources", "ffmpeg.exe");
+    if (fs.existsSync(bundled)) {
+        _ffmpegPathCache = bundled;
+        return _ffmpegPathCache;
+    }
+
+    console.warn("[ffmpeg] No bundled binary found — falling back to PATH.");
+    _ffmpegPathCache = process.platform === "win32" ? "ffmpeg.exe" : "ffmpeg";
+    return _ffmpegPathCache;
+}
+
+// Run FFmpeg with the given args. Captures stderr and surfaces it on failure
+// so a non-zero/crash exit code is actionable instead of opaque.
+function runFfmpeg(args) {
+    const ffmpegPath = getFfmpegPath();
+    return new Promise((resolve, reject) => {
+        let proc;
+        try {
+            proc = spawn(ffmpegPath, args, { windowsHide: true });
+        } catch (e) {
+            return reject(
+                new Error(`Failed to spawn FFmpeg at "${ffmpegPath}": ${e.message}`),
+            );
+        }
+        let stderr = "";
+        proc.stderr.on("data", (d) => {
+            stderr += d.toString();
+        });
+        proc.on("error", (e) =>
+            reject(new Error(`FFmpeg spawn error ("${ffmpegPath}"): ${e.message}`)),
+        );
+        proc.on("exit", (code) => {
+            if (code === 0) return resolve();
+            reject(
+                new Error(
+                    `FFmpeg exited with code ${code} (binary: "${ffmpegPath}"). ` +
+                    `stderr: ${stderr.slice(-800) || "(empty)"}`,
+                ),
+            );
+        });
+    });
 }
 
 function closeAllAudioStreams() {
@@ -54,16 +123,33 @@ const OUT_DIR = path.join(__dirname, "..", "out");
 const APP_SCHEME = "app";
 const APP_ORIGIN = `${APP_SCHEME}://local/`;
 
-protocol.registerSchemesAsPrivileged([{
-    scheme: APP_SCHEME,
-    privileges: {
-        standard: true,
-        secure: true,
-        supportFetchAPI: true,
-        corsEnabled: true,
-        stream: true,
+// Privileged scheme for serving locally-recorded/remuxed audio to the
+// sandboxed renderer. `stream: true` enables Range requests (seeking).
+const MEDIA_SCHEME = "media";
+const MEDIA_HOST = "recordings";
+
+protocol.registerSchemesAsPrivileged([
+    {
+        scheme: APP_SCHEME,
+        privileges: {
+            standard: true,
+            secure: true,
+            supportFetchAPI: true,
+            corsEnabled: true,
+            stream: true,
+        },
     },
-}, ]);
+    {
+        scheme: MEDIA_SCHEME,
+        privileges: {
+            standard: true,
+            secure: true,
+            supportFetchAPI: true,
+            corsEnabled: true,
+            stream: true,
+        },
+    },
+]);
 
 const MIME_TYPES = {
     ".html": "text/html",
@@ -110,6 +196,80 @@ function handleAppProtocol(request) {
     );
 }
 
+const AUDIO_MIME_TYPES = {
+    ".ogg": "audio/ogg",
+    ".opus": "audio/ogg",
+    ".oga": "audio/ogg",
+    ".mp3": "audio/mpeg",
+    ".m4a": "audio/mp4",
+    ".webm": "audio/webm",
+    ".wav": "audio/wav",
+};
+
+// Serves files from the recordings directory over media://recordings/<file>,
+// honoring Range requests so the <audio> element can seek.
+async function handleMediaProtocol(request) {
+    const recordingsDir = getRecordingsDirectory();
+    const url = new URL(request.url);
+    // Only ever serve a bare basename out of the recordings dir — defeats
+    // any "../" traversal attempt encoded in the path.
+    const fileName = path.basename(decodeURIComponent(url.pathname));
+    const filePath = path.normalize(path.join(recordingsDir, fileName));
+
+    if (!filePath.startsWith(recordingsDir) || !fs.existsSync(filePath)) {
+        return new Response("Not found", { status: 404 });
+    }
+
+    const total = fs.statSync(filePath).size;
+    const ext = path.extname(filePath).toLowerCase();
+    const mime = AUDIO_MIME_TYPES[ext] || "application/octet-stream";
+
+    const rangeHeader = request.headers.get("Range") || request.headers.get("range");
+    if (rangeHeader) {
+        const match = /bytes=(\d*)-(\d*)/.exec(rangeHeader);
+        let start = match && match[1] ? parseInt(match[1], 10) : 0;
+        let end = match && match[2] ? parseInt(match[2], 10) : total - 1;
+        if (Number.isNaN(start)) start = 0;
+        if (Number.isNaN(end) || end >= total) end = total - 1;
+
+        if (start > end || start >= total) {
+            return new Response(null, {
+                status: 416,
+                headers: { "Content-Range": `bytes */${total}` },
+            });
+        }
+
+        const chunkSize = end - start + 1;
+        const buffer = Buffer.alloc(chunkSize);
+        const fd = fs.openSync(filePath, "r");
+        try {
+            fs.readSync(fd, buffer, 0, chunkSize, start);
+        } finally {
+            fs.closeSync(fd);
+        }
+
+        return new Response(buffer, {
+            status: 206,
+            headers: {
+                "Content-Type": mime,
+                "Content-Range": `bytes ${start}-${end}/${total}`,
+                "Accept-Ranges": "bytes",
+                "Content-Length": String(chunkSize),
+            },
+        });
+    }
+
+    const data = await fs.promises.readFile(filePath);
+    return new Response(data, {
+        status: 200,
+        headers: {
+            "Content-Type": mime,
+            "Accept-Ranges": "bytes",
+            "Content-Length": String(total),
+        },
+    });
+}
+
 function createWindow() {
     const win = new BrowserWindow({
         width: 1280,
@@ -150,6 +310,7 @@ function createWindow() {
 
 app.whenReady().then(() => {
     protocol.handle(APP_SCHEME, handleAppProtocol);
+    protocol.handle(MEDIA_SCHEME, handleMediaProtocol);
 
     session.defaultSession.setPermissionRequestHandler(
         (_wc, permission, callback) => {
@@ -218,23 +379,36 @@ ipcMain.handle("save-transcript-local", async(_event, payload = {}) => {
     return { saved: true, filePath };
 });
 
+const audioBytesWritten = new Map();
+
 ipcMain.handle("audio-file-create", async() => {
     const filePath = createRecordingFilePath();
     const writeStream = fs.createWriteStream(filePath, { flags: "a" });
     audioWriteStreams.set(filePath, writeStream);
+    audioBytesWritten.set(filePath, 0);
+    console.log("[Recorder/main] audio-file-create → absolute path:", filePath);
     return filePath;
 });
 
 ipcMain.handle("audio-file-append", async(_event, filePath, chunk) => {
     const writeStream = audioWriteStreams.get(filePath);
     if (!writeStream) {
+        console.warn("[Recorder/main] audio-file-append: NO active stream for", filePath);
         throw new Error(`No active audio write stream found for ${filePath}`);
     }
 
     const buffer = Buffer.from(chunk);
     return new Promise((resolve, reject) => {
         writeStream.write(buffer, (err) => {
-            if (err) return reject(err);
+            if (err) {
+                console.error("[Recorder/main] write error:", err);
+                return reject(err);
+            }
+            const total = (audioBytesWritten.get(filePath) || 0) + buffer.length;
+            audioBytesWritten.set(filePath, total);
+            console.log(
+                `[Recorder/main] appended ${buffer.length} bytes (total ${total}) → ${filePath}`,
+            );
             resolve(true);
         });
     });
@@ -243,15 +417,74 @@ ipcMain.handle("audio-file-append", async(_event, filePath, chunk) => {
 ipcMain.handle("audio-file-close", async(_event, filePath) => {
     const writeStream = audioWriteStreams.get(filePath);
     if (!writeStream) {
+        console.warn("[Recorder/main] audio-file-close: no stream for", filePath);
         return false;
     }
 
     return new Promise((resolve) => {
-        writeStream.end(() => {
+        // Resolve on "close" (the OS file descriptor is actually released),
+        // NOT just on "finish" (data flushed). On Windows an open write handle
+        // locks the file, so a too-early resolve lets FFmpeg spawn against a
+        // locked file → "Invalid data found when processing input".
+        const finalize = () => {
             audioWriteStreams.delete(filePath);
+            let sizeOnDisk = 0;
+            try {
+                sizeOnDisk = fs.statSync(filePath).size;
+            } catch (e) {
+                console.warn("[Recorder/main] stat failed after close:", e);
+            }
+            console.log(
+                `[Recorder/main] audio-file-close → ${filePath} | bytes appended: ${
+                    audioBytesWritten.get(filePath) || 0
+                } | size on disk: ${sizeOnDisk}`,
+            );
+            audioBytesWritten.delete(filePath);
             resolve(true);
+        };
+        writeStream.once("close", finalize);
+        writeStream.once("error", (err) => {
+            console.warn("[Recorder/main] write stream error on close:", err);
+            finalize();
         });
+        writeStream.end();
     });
+});
+
+// Remux the raw streaming .webm (which has no duration in its header) into a
+// clean .ogg/opus file. Re-encoding — rather than a stream copy — guarantees a
+// valid header and granule positions, so the <audio> element reports a real
+// duration and can seek. Returns a media:// URL the sandboxed renderer can load.
+ipcMain.handle("remux-audio", async(_event, filePath) => {
+    if (!filePath || !fs.existsSync(filePath)) {
+        throw new Error(`Recording file not found for remux: ${filePath}`);
+    }
+    const dir = path.dirname(filePath);
+    const base = path.basename(filePath).replace(/\.[^.]+$/, "");
+    const outputPath = path.join(dir, `${base}-final.ogg`);
+
+    // Same permissive input handling as the compress step — the source is the
+    // same header-light streaming WebM.
+    await runFfmpeg([
+        "-y",
+        "-fflags", "+genpts+discardcorrupt",
+        "-err_detect", "ignore_err",
+        "-f", "webm",
+        "-i", filePath,
+        "-vn", "-c:a", "libopus", "-b:a", "32k",
+        outputPath,
+    ]);
+
+    const fileName = path.basename(outputPath);
+    const sizeOnDisk = fs.existsSync(outputPath) ? fs.statSync(outputPath).size : 0;
+    console.log(
+        `[Recorder/main] remux-audio → ${outputPath} | size: ${sizeOnDisk} bytes`,
+    );
+    return {
+        outputPath,
+        fileName,
+        mediaUrl: `${MEDIA_SCHEME}://${MEDIA_HOST}/${encodeURIComponent(fileName)}`,
+    };
 });
 
 const SEGMENT_SECONDS = 9000;
@@ -260,23 +493,28 @@ ipcMain.handle("audio-compress-and-read", async(_event, filePath) => {
     if (!filePath || !fs.existsSync(filePath)) {
         throw new Error(`Recording file not found: ${filePath}`);
     }
-    const ffmpeg = getFfmpegPath();
+    if (fs.statSync(filePath).size === 0) {
+        throw new Error(`Recording file is empty (0 bytes): ${filePath}`);
+    }
+
     const dir = path.dirname(filePath);
     const base = path.basename(filePath).replace(/\.[^.]+$/, "");
     const outPattern = path.join(dir, `${base}-chunk-%03d.ogg`);
 
-    await new Promise((resolve, reject) => {
-        const proc = spawn(ffmpeg, [
-            "-y", "-i", filePath,
-            "-vn", "-ar", "16000", "-ac", "1", "-c:a", "libopus", "-b:a", "24k",
-            "-f", "segment", "-segment_time", String(SEGMENT_SECONDS),
-            outPattern,
-        ]);
-        proc.on("error", reject);
-        proc.on("exit", (code) =>
-            code === 0 ? resolve() : reject(new Error(`ffmpeg exited with code ${code}`)),
-        );
-    });
+    // The streaming WebM from MediaRecorder often has missing/loose headers
+    // (FFmpeg reports "detected only with low score of 1"). These INPUT options
+    // (all before -i) force WebM demuxing, ignore header corruption, regenerate
+    // presentation timestamps, and drop corrupt packets instead of aborting.
+    await runFfmpeg([
+        "-y",
+        "-fflags", "+genpts+discardcorrupt",
+        "-err_detect", "ignore_err",
+        "-f", "webm",
+        "-i", filePath,
+        "-vn", "-ar", "16000", "-ac", "1", "-c:a", "libopus", "-b:a", "24k",
+        "-f", "segment", "-segment_time", String(SEGMENT_SECONDS),
+        outPattern,
+    ]);
 
     const produced = (await fs.promises.readdir(dir))
         .filter((f) => f.startsWith(`${base}-chunk-`) && f.endsWith(".ogg"))
@@ -286,15 +524,20 @@ ipcMain.handle("audio-compress-and-read", async(_event, filePath) => {
     for (const f of produced) {
         const full = path.join(dir, f);
         const data = await fs.promises.readFile(full);
-        chunks.push({
-            buffer: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength),
-            name: f,
-        });
+        // Skip zero-byte segments so we never hand the diarizer an invalid blob.
+        if (data.byteLength > 0) {
+            chunks.push({
+                buffer: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength),
+                name: f,
+            });
+        }
         fs.promises.unlink(full).catch(() => {});
     }
 
     if (chunks.length === 0) {
-        throw new Error("ffmpeg produced no audio chunks.");
+        throw new Error(
+            "FFmpeg produced no usable audio chunks — the recording may be empty or corrupt.",
+        );
     }
     return { chunks, segmentSeconds: SEGMENT_SECONDS, mimeType: "audio/ogg" };
 });

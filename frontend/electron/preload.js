@@ -18,4 +18,5 @@ contextBridge.exposeInMainWorld("electronAPI", {
     audioFileClose: (filePath) => ipcRenderer.invoke("audio-file-close", filePath),
     audioCompressAndRead: (filePath) =>
         ipcRenderer.invoke("audio-compress-and-read", filePath),
+    remuxAudio: (filePath) => ipcRenderer.invoke("remux-audio", filePath),
 });

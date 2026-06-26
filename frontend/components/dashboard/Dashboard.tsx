@@ -6,7 +6,7 @@ import { useGlobalRecording } from "@/components/GlobalRecordingProvider";
 import MyMeetings from "@/components/MyMeetings";
 import Sidebar, { type DashboardView } from "./Sidebar";
 import CaptureControls from "./CaptureControls";
-import TranscriptArea, { type Segment } from "./TranscriptArea";
+import TranscriptArea from "./TranscriptArea";
 import {
   loadMeetings,
   addMeeting,
@@ -82,9 +82,7 @@ export default function Dashboard() {
     [lines, interim],
   );
 
-  const [segments, setSegments] = useState<Segment[]>([]);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
-  const [showPlayback, setShowPlayback] = useState(false);
   const [mergedTranscript, setMergedTranscript] = useState<MergedTranscriptRow[]>([]);
   const [isDiarizing, setIsDiarizing] = useState(false);
   const [currentAudioTime, setCurrentAudioTime] = useState(0);
@@ -269,9 +267,7 @@ export default function Dashboard() {
 
   const clearPlayback = useCallback(() => {
     setMergedEditMode(false);
-    setSegments([]);
     setMergedTranscript([]);
-    setShowPlayback(false);
     setCurrentAudioTime(0);
     setAudioUrl((prev) => {
       if (prev && prev.startsWith("blob:")) URL.revokeObjectURL(prev);
@@ -335,7 +331,6 @@ export default function Dashboard() {
         setMergedTranscript(rows);
         setLines([]);
         setInterim("");
-        setShowPlayback(true);
         void saveTranscriptLocally(rows);
       }
       setStatusMessage(
@@ -366,9 +361,10 @@ export default function Dashboard() {
       typeof window !== "undefined" ? window.electronAPI : undefined;
     const localPath = electron?.getPathForFile?.(uploadFile) || "";
 
-    const playbackUrl = localPath
-      ? `file://${localPath}`
-      : URL.createObjectURL(uploadFile);
+    // Uploaded files live outside the recordings dir, so the media:// scheme
+    // can't serve them. A same-origin blob URL plays reliably in the sandboxed
+    // renderer (and is revoked in clearPlayback). Avoids the file:// block.
+    const playbackUrl = URL.createObjectURL(uploadFile);
     setCurrentAudioTime(0);
     setAudioUrl(playbackUrl);
 
@@ -491,8 +487,7 @@ export default function Dashboard() {
   }, [uploadFile, clearPlayback, saveTranscriptLocally]);
 
   const handleSaveTranscript = useCallback(async () => {
-    if (!transcriptText.trim() && segments.length === 0 && mergedTranscript.length === 0)
-      return;
+    if (!transcriptText.trim() && mergedTranscript.length === 0) return;
     const defaultName = `ThreadNotes_Transcript_${new Date().toISOString().slice(0, 10)}.txt`;
 
     try {
@@ -522,12 +517,6 @@ export default function Dashboard() {
               text: stripSpeakerPrefix(item.text),
               timestamp: "",
             }))
-          : segments.length > 0
-          ? segments.map((s) => ({
-              speaker: s.speaker,
-              text: stripSpeakerPrefix(s.text),
-              timestamp: "",
-            }))
           : lines.map((l) => ({ speaker: "Speaker", text: l, timestamp: "" }));
       const firstWords =
         entries[0]?.text.split(" ").slice(0, 5).join(" ") || "Discussion";
@@ -542,7 +531,7 @@ export default function Dashboard() {
     } catch {
       setStatusMessage("⚠️ Save failed");
     }
-  }, [transcriptText, segments, lines]);
+  }, [transcriptText, mergedTranscript, lines]);
 
   const doReset = useCallback(() => {
     sessionIdRef.current += 1;
@@ -561,12 +550,12 @@ export default function Dashboard() {
   }, [isRecording, cancel, clearPlayback, stopLiveEvents]);
 
   const handleNewConversationClick = useCallback(() => {
-    if (isRecording || lines.length > 0 || segments.length > 0) {
+    if (isRecording || lines.length > 0 || mergedTranscript.length > 0) {
       setShowNewConvoModal(true);
     } else {
       doReset();
     }
-  }, [isRecording, lines.length, segments.length, doReset]);
+  }, [isRecording, lines.length, mergedTranscript.length, doReset]);
 
   const handleLogout = useCallback(() => {
     stopLiveEvents();
@@ -602,8 +591,6 @@ export default function Dashboard() {
   const handleTranscriptEdit = useCallback((text: string) => {
     setLines(text ? [text] : []);
     setInterim("");
-    setSegments([]);
-    setShowPlayback(false);
   }, []);
 
   return (
@@ -750,14 +737,11 @@ export default function Dashboard() {
                                 key={`${item.speaker}-${item.start}-${index}`}
                                 className="rounded-xl border border-transparent bg-white/40 px-4 py-3"
                               >
-                                <div className="mb-1 flex items-center justify-between gap-3">
+                                <div className="mb-1 flex items-center gap-3">
                                   <p
                                     className={`text-sm font-bold ${speakerColor}`}
                                   >
                                     {item.speaker}
-                                  </p>
-                                  <p className="shrink-0 text-[11px] font-medium uppercase tracking-widest text-slate-400">
-                                    {formatTime(item.start)} – {formatTime(item.end)}
                                   </p>
                                 </div>
                                 <p className="text-[15px] leading-relaxed text-slate-700">
@@ -791,9 +775,6 @@ export default function Dashboard() {
                 ) : (
                   <TranscriptArea
                     transcriptText={transcriptText}
-                    segments={segments}
-                    audioUrl={audioUrl}
-                    showPlayback={showPlayback}
                     editable={!isRecording}
                     onSave={handleSaveTranscript}
                     onTranscriptEdit={handleTranscriptEdit}

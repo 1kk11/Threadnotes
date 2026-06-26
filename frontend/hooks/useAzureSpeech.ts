@@ -12,12 +12,6 @@ type UseAzureSpeechProps = {
   onError?: (message: string) => void;
 };
 
-type AzureTranscriptItem = {
-  text: string;
-  start: number;
-  end: number;
-};
-
 export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
   const callbacksRef = useRef({
     onPartial: initialProps?.onPartial,
@@ -43,7 +37,6 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
   const recognizerRef = useRef<SpeechSDK.SpeechRecognizer | null>(null);
   const renewTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const azureTranscriptRef = useRef<AzureTranscriptItem[]>([]);
   const audioFilePathRef = useRef<string | null>(null);
   const audioWriteChainRef = useRef<Promise<void>>(Promise.resolve());
   const qualityIntervalRef = useRef<ReturnType<typeof setInterval> | null>(
@@ -103,19 +96,6 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
     }, TOKEN_REFRESH_MS);
   }, [fetchAzureToken]);
 
-  const normalizeAzureResultTimestamps = (result: any) => {
-    const rawStart = Number(result.offset ?? result.result?.offset ?? 0);
-    const rawDuration = Number(result.duration ?? result.result?.duration ?? 0);
-    const isTicks = rawStart > 100000 || rawDuration > 100000;
-    const start = isTicks ? rawStart / 10000000 : rawStart;
-    const duration = isTicks ? rawDuration / 10000000 : rawDuration;
-
-    return {
-      start: Math.max(0, start),
-      end: Math.max(0, start + duration),
-    };
-  };
-
   const initRecognizer = useCallback(
     (token: string, region: string): SpeechSDK.SpeechRecognizer => {
       const speechConfig = SpeechSDK.SpeechConfig.fromAuthorizationToken(
@@ -155,13 +135,6 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
           if (lang) {
             setDetectedLanguage(lang.startsWith("hi") ? "Hindi" : "English");
           }
-
-          const { start, end } = normalizeAzureResultTimestamps(e.result);
-          azureTranscriptRef.current.push({
-            text: e.result.text,
-            start,
-            end,
-          });
 
           callbacksRef.current.onFinal?.(e.result.text);
         }
@@ -242,10 +215,20 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
       });
       micStreamRef.current = micStream;
 
-      if (micStream.getAudioTracks().length > 0) {
-        setMicLabel(
-          micStream.getAudioTracks()[0].label || "Default Microphone",
-        );
+      const micTracks = micStream.getAudioTracks();
+      console.log(
+        "[Recorder] getUserMedia mic tracks:",
+        micTracks.length,
+        micTracks.map((t) => ({
+          label: t.label,
+          enabled: t.enabled,
+          muted: t.muted,
+          readyState: t.readyState,
+        })),
+      );
+
+      if (micTracks.length > 0) {
+        setMicLabel(micTracks[0].label || "Default Microphone");
       }
 
       let systemStream: MediaStream | null = null;
@@ -282,6 +265,14 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
         window.AudioContext || (window as any).webkitAudioContext;
       const audioCtx = new AudioContextClass();
       audioCtxRef.current = audioCtx;
+      // An AudioContext created without a user-gesture can start "suspended";
+      // while suspended NO samples flow to the destination, so MediaRecorder
+      // records silence / zero-size chunks. Resume before wiring the graph.
+      if (audioCtx.state === "suspended") {
+        console.warn("[Recorder] AudioContext suspended — resuming.");
+        await audioCtx.resume();
+      }
+      console.log("[Recorder] AudioContext state:", audioCtx.state);
       const destination = audioCtx.createMediaStreamDestination();
 
       const micSource = audioCtx.createMediaStreamSource(micStream);
@@ -318,7 +309,11 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
       const mixedStream = destination.stream;
       streamRef.current = mixedStream;
       isPausedRef.current = false;
-      azureTranscriptRef.current = [];
+
+      console.log(
+        "[Recorder] mixed (recorded) stream audio tracks:",
+        mixedStream.getAudioTracks().length,
+      );
 
       let recordingFilePath: string | null = null;
       if (typeof window !== "undefined" && window.electronAPI?.audioFileCreate) {
@@ -326,29 +321,96 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
           recordingFilePath = await window.electronAPI.audioFileCreate();
           audioFilePathRef.current = recordingFilePath;
           audioWriteChainRef.current = Promise.resolve();
+          console.log(
+            "[Recorder] local recording file created at:",
+            recordingFilePath,
+          );
         } catch (e) {
-          console.warn("Failed to create local recording file:", e);
+          console.warn("[Recorder] Failed to create local recording file:", e);
           recordingFilePath = null;
         }
+      } else {
+        console.warn(
+          "[Recorder] electronAPI.audioFileCreate unavailable — running outside Electron? Audio will NOT be saved to disk.",
+        );
       }
 
-      const recorder = new MediaRecorder(mixedStream);
-      recorder.ondataavailable = async (e) => {
-        if (!e.data || e.data.size === 0) return;
-        const localPath = audioFilePathRef.current;
-        if (!localPath || typeof window === "undefined" || !window.electronAPI?.audioFileAppend) return;
+      // Pin an explicitly-supported container so we don't get a silent
+      // "no recorder for default type" failure on some Chromium builds.
+      const PREFERRED_TYPES = [
+        "audio/webm;codecs=opus",
+        "audio/webm",
+        "audio/ogg;codecs=opus",
+      ];
+      const mimeType =
+        PREFERRED_TYPES.find((t) => MediaRecorder.isTypeSupported(t)) || "";
+      const recorder = mimeType
+        ? new MediaRecorder(mixedStream, { mimeType })
+        : new MediaRecorder(mixedStream);
+      console.log(
+        "[Recorder] MediaRecorder created. requested:",
+        mimeType || "(browser default)",
+        "| actual mimeType:",
+        recorder.mimeType,
+      );
 
-        const arrayBuffer = await e.data.arrayBuffer();
+      let recordedChunksLength = 0;
+      recorder.onstart = () =>
+        console.log("[Recorder] onstart — state:", recorder.state);
+      recorder.onerror = (ev) =>
+        console.error("[Recorder] MediaRecorder error event:", ev);
+
+      // NOTE: this handler is intentionally NOT async. It extends the write
+      // chain *synchronously* (reading the blob inside the chained .then) so
+      // that the final chunk emitted during recorder.stop() is guaranteed to
+      // be queued before finishAndUpload() awaits the chain — closing the
+      // end-of-recording flush race.
+      recorder.ondataavailable = (e) => {
+        recordedChunksLength += 1;
+        const size = e.data?.size ?? 0;
+        console.log(
+          `[Recorder] chunk #${recordedChunksLength} — size: ${size} bytes, blob type: ${
+            e.data?.type || "(none)"
+          }, recordedChunks length: ${recordedChunksLength}`,
+        );
+        if (!e.data || size === 0) {
+          console.warn(
+            "[Recorder] EMPTY chunk — MediaRecorder is not receiving audio from the mic/stream (check AudioContext state & track.muted above).",
+          );
+          return;
+        }
+        const localPath = audioFilePathRef.current;
+        if (
+          !localPath ||
+          typeof window === "undefined" ||
+          !window.electronAPI?.audioFileAppend
+        ) {
+          console.warn(
+            "[Recorder] Cannot persist chunk — missing path or IPC.",
+            { localPath, hasAppendIPC: !!window.electronAPI?.audioFileAppend },
+          );
+          return;
+        }
+
+        const blob = e.data;
         audioWriteChainRef.current = audioWriteChainRef.current
           .then(async () => {
+            const arrayBuffer = await blob.arrayBuffer();
+            console.log(
+              `[Recorder] appending ${arrayBuffer.byteLength} bytes → ${localPath}`,
+            );
             await window.electronAPI?.audioFileAppend(localPath, arrayBuffer);
           })
           .catch((error) => {
-            console.warn("Audio append failed:", error);
+            console.warn("[Recorder] Audio append failed:", error);
           });
       };
       mediaRecorderRef.current = recorder;
       recorder.start(1000);
+      console.log(
+        "[Recorder] recorder.start(1000) invoked — state:",
+        recorder.state,
+      );
 
       const { token, region } = await fetchAzureToken();
       const recognizer = initRecognizer(token, region);
@@ -425,28 +487,74 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
     });
     recognizerRef.current = null;
 
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+    // Stop the recorder and WAIT for its final "stop" event. MediaRecorder
+    // flushes a last "dataavailable" (the tail of the recording) synchronously
+    // before "stop" fires; because ondataavailable extends the write chain
+    // synchronously, awaiting onstop and then the chain guarantees every byte
+    // — including that final chunk — is appended before we close the file.
+    await new Promise<void>((resolve) => {
+      const recorder = mediaRecorderRef.current;
+      if (!recorder || recorder.state === "inactive") return resolve();
+      console.log(
+        "[Recorder] stopping MediaRecorder — state before stop:",
+        recorder.state,
+      );
+      let settled = false;
+      const done = () => {
+        if (settled) return;
+        settled = true;
+        console.log("[Recorder] MediaRecorder onstop fired.");
+        resolve();
+      };
+      recorder.onstop = done;
+      // Safety net: if onstop never fires, don't hang the finish flow.
+      setTimeout(done, 4000);
       try {
-        mediaRecorderRef.current.stop();
-      } catch {
+        recorder.stop();
+      } catch (err) {
+        console.warn("[Recorder] recorder.stop() threw:", err);
+        done();
+      }
+    });
+
+    // Flush all queued appends (the final chunk is now guaranteed enqueued).
+    await audioWriteChainRef.current;
+    const audioFilePath = audioFilePathRef.current;
+    console.log("[Recorder] finishing — audio file path:", audioFilePath);
+
+    // Playback URL is produced by the remux step below (media:// scheme).
+    // We no longer hand the raw .webm (file://) to the player.
+    let playbackUrl: string | null = null;
+
+    if (audioFilePath && typeof window !== "undefined" && window.electronAPI?.audioFileClose) {
+      try {
+        const closed = await window.electronAPI.audioFileClose(audioFilePath);
+        console.log("[Recorder] audioFileClose result:", closed);
+      } catch (error) {
+        console.warn("[Recorder] Failed to close local audio file:", error);
       }
     }
 
-    await audioWriteChainRef.current;
-    const audioFilePath = audioFilePathRef.current;
-    if (audioFilePath && typeof window !== "undefined" && window.electronAPI?.audioFileClose) {
+    // Finalize the streaming .webm into a seekable .ogg with valid duration
+    // metadata, and serve it over the privileged media:// scheme.
+    if (audioFilePath && typeof window !== "undefined" && window.electronAPI?.remuxAudio) {
       try {
-        await window.electronAPI.audioFileClose(audioFilePath);
+        const { mediaUrl } = await window.electronAPI.remuxAudio(audioFilePath);
+        playbackUrl = mediaUrl;
+        console.log("[Recorder] remux complete — playback URL:", playbackUrl);
       } catch (error) {
-        console.warn("Failed to close local audio file:", error);
+        console.warn("[Recorder] Remux failed — playback unavailable:", error);
       }
     }
 
     let mergedTranscript: any[] = [];
 
+    // Diarization is ACOUSTIC (runs on the recorded audio), so it must fire
+    // whenever we have an audio file — independent of whether the live
+    // recognizer happened to emit any interim text. Gating on the live
+    // transcript was the bug that silently produced empty transcripts.
     if (
       audioFilePath &&
-      azureTranscriptRef.current.length > 0 &&
       typeof window !== "undefined" &&
       window.electronAPI?.audioCompressAndRead
     ) {
@@ -508,10 +616,12 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
     cleanupStreams();
     mediaRecorderRef.current = null;
     audioFilePathRef.current = null;
-    azureTranscriptRef.current = [];
 
-    const audioUrl = audioFilePath ? `file://${audioFilePath}` : null;
-    return { status: "success", audioUrl, merged_transcript: mergedTranscript };
+    return {
+      status: "success",
+      audioUrl: playbackUrl,
+      merged_transcript: mergedTranscript,
+    };
   }, [cleanupStreams, readJwt, DIARIZE_URL]);
 
   const cancel = useCallback(() => {
@@ -540,7 +650,6 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
       audioFilePathRef.current = null;
     }
 
-    azureTranscriptRef.current = [];
     cleanupStreams();
     isPausedRef.current = false;
     recognizerDeadRef.current = false;

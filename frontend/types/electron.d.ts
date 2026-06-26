@@ -27,6 +27,9 @@ declare global {
       segmentSeconds: number;
       mimeType: string;
     }>;
+    remuxAudio: (
+      filePath: string,
+    ) => Promise<{ outputPath: string; fileName: string; mediaUrl: string }>;
   }
 
   interface Window {

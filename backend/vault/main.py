@@ -385,6 +385,29 @@ def _run_diarization(audio_bytes: bytes, filename: str, content_type: str = "") 
         label = speaker_map[raw]
         start = float(seg.get("start", 0.0) or 0.0)
         end = float(seg.get("end", start) or start)
+        # Preserve the diarizer's REAL per-word timestamps when present; only
+        # fall back to proportional interpolation if the model didn't return
+        # word-level timing. Either way the frontend receives {word,start,end}.
+        raw_words = seg.get("words")
+        if isinstance(raw_words, list) and raw_words:
+            words = []
+            for w in raw_words:
+                token = str(w.get("word", w.get("text", "")) or "").strip()
+                if not token:
+                    continue
+                w_start = float(w.get("start", start) or start)
+                w_end = float(w.get("end", w_start) or w_start)
+                words.append(
+                    {
+                        "word": token,
+                        "start": round(w_start, 3),
+                        "end": round(w_end, 3),
+                    }
+                )
+            if not words:
+                words = interpolate_words(text, start, end)
+        else:
+            words = interpolate_words(text, start, end)
         segments.append(
             {
                 "type": "transcript",
@@ -392,7 +415,7 @@ def _run_diarization(audio_bytes: bytes, filename: str, content_type: str = "") 
                 "speaker": label,
                 "start": round(start, 3),
                 "end": round(end, 3),
-                "words": interpolate_words(text, start, end),
+                "words": words,
             }
         )
     return segments
