@@ -1,8 +1,8 @@
 from datetime import datetime, timezone, timedelta
 import asyncio
 import json
+import logging
 import os
-import random
 import re
 import secrets
 import smtplib
@@ -18,7 +18,7 @@ from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, EmailStr
-from azure.cosmos import CosmosClient, PartitionKey
+from azure.cosmos import CosmosClient
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -46,6 +46,33 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+logging.basicConfig(level=logging.INFO)
+_env_log = logging.getLogger("threadnotes.env")
+
+
+@app.on_event("startup")
+def _diagnose_env():
+    """Log presence + length of critical env vars at startup. Never logs the
+    actual secret values — only whether they're set and how long they are."""
+    for key in (
+        "EMAIL_SENDER",
+        "EMAIL_PASSWORD",
+        "JWT_SECRET",
+        "COSMOS_ENDPOINT",
+        "COSMOS_KEY",
+        "COSMOS_DATABASE",
+        "AZURE_SPEECH_KEY",
+        "AZURE_SPEECH_REGION",
+    ):
+        val = os.getenv(key)
+        _env_log.info(
+            "ENV %-20s present=%-5s length=%s",
+            key,
+            bool(val),
+            len(val) if val else 0,
+        )
+
 
 security = HTTPBearer(auto_error=True)
 

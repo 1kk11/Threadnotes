@@ -1,4 +1,5 @@
 "use client";
+import { type ReactNode } from "react";
 import { AlertTriangle } from "lucide-react";
 
 type ConfirmModalProps = {
@@ -9,6 +10,8 @@ type ConfirmModalProps = {
   cancelLabel?: string;
   danger?: boolean;
   loading?: boolean;
+  confirmDisabled?: boolean;
+  children?: ReactNode;
   onConfirm: () => void;
   onCancel: () => void;
 };
@@ -21,6 +24,8 @@ export default function ConfirmModal({
   cancelLabel = "Cancel",
   danger = false,
   loading = false,
+  confirmDisabled = false,
+  children,
   onConfirm,
   onCancel,
 }: ConfirmModalProps) {
@@ -36,6 +41,7 @@ export default function ConfirmModal({
         )}
         <h3 className="text-xl font-bold text-slate-900">{title}</h3>
         <p className="mt-2 text-sm leading-relaxed text-slate-500">{message}</p>
+        {children && <div className="mt-5">{children}</div>}
         <div className="mt-7 flex gap-3">
           <button
             onClick={onCancel}
@@ -46,7 +52,7 @@ export default function ConfirmModal({
           </button>
           <button
             onClick={onConfirm}
-            disabled={loading}
+            disabled={loading || confirmDisabled}
             className={`flex-1 rounded-xl py-3 text-sm font-bold text-white shadow-lg transition-all disabled:cursor-not-allowed disabled:opacity-50 ${
               danger
                 ? "bg-linear-to-r from-rose-500 to-red-500 shadow-red-500/25 hover:from-rose-600 hover:to-red-600"

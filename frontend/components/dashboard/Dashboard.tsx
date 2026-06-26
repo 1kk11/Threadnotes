@@ -10,7 +10,6 @@ import TranscriptArea from "./TranscriptArea";
 import {
   loadMeetings,
   addMeeting,
-  clearMeetings,
   MEETINGS_EVENT,
 } from "@/lib/meetingStore";
 import { getUserName, clearSession } from "@/lib/auth";
@@ -95,6 +94,8 @@ export default function Dashboard() {
   const [showLogoutModal, setShowLogoutModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [deletePassword, setDeletePassword] = useState("");
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const [userName, setUserName] = useState<string | null>(null);
 
   useEffect(() => {
@@ -565,28 +566,43 @@ export default function Dashboard() {
   }, [isRecording, cancel, router, stopLiveEvents]);
 
   const handleDeleteAccount = useCallback(async () => {
+    if (!deletePassword) {
+      setDeleteError("Please enter your password to confirm.");
+      return;
+    }
     setDeleting(true);
+    setDeleteError(null);
     try {
       const token = localStorage.getItem("token");
       const res = await fetch(`${API_URL}/delete-account`, {
         method: "DELETE",
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        headers: {
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ confirm_password: deletePassword }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.detail || "Failed to delete account");
       }
+      // Account is gone — stop everything and wipe all local session state.
       stopLiveEvents();
       if (isRecording) cancel();
-      clearMeetings();
-      clearSession();
+      localStorage.clear();
       router.replace("/auth");
     } catch (e: any) {
+      // Keep the modal open so the user can correct the password and retry.
       setDeleting(false);
-      setShowDeleteModal(false);
-      setStatusMessage(`⚠️ ${e?.message || "Delete failed"}`);
+      setDeleteError(e?.message || "Delete failed");
     }
-  }, [isRecording, cancel, router, stopLiveEvents]);
+  }, [isRecording, cancel, router, stopLiveEvents, deletePassword]);
+
+  const closeDeleteModal = useCallback(() => {
+    setShowDeleteModal(false);
+    setDeletePassword("");
+    setDeleteError(null);
+  }, []);
 
   const handleTranscriptEdit = useCallback((text: string) => {
     setLines(text ? [text] : []);
@@ -925,13 +941,30 @@ export default function Dashboard() {
         open={showDeleteModal}
         danger
         loading={deleting}
+        confirmDisabled={!deletePassword}
         title="Delete account?"
-        message="Are you sure you want to permanently delete your account? This action cannot be undone."
+        message="This permanently deletes your account and cannot be undone. Enter your password to confirm."
         confirmLabel="Delete"
         cancelLabel="Cancel"
         onConfirm={handleDeleteAccount}
-        onCancel={() => setShowDeleteModal(false)}
-      />
+        onCancel={closeDeleteModal}
+      >
+        <input
+          type="password"
+          value={deletePassword}
+          onChange={(e) => {
+            setDeletePassword(e.target.value);
+            if (deleteError) setDeleteError(null);
+          }}
+          placeholder="Current password"
+          autoComplete="current-password"
+          disabled={deleting}
+          className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm text-slate-800 outline-none focus:border-rose-400 focus:ring-2 focus:ring-rose-200 disabled:opacity-50"
+        />
+        {deleteError && (
+          <p className="mt-2 text-xs font-semibold text-rose-600">{deleteError}</p>
+        )}
+      </ConfirmModal>
     </div>
   );
 }
