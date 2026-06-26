@@ -4,6 +4,7 @@ import json
 import os
 import random
 import re
+import secrets
 import smtplib
 import uuid
 from email.mime.text import MIMEText
@@ -48,8 +49,10 @@ app.add_middleware(
 
 security = HTTPBearer(auto_error=True)
 
-otp_storage: Dict[str, str] = {}
-signup_otp_storage: Dict[str, str] = {}
+otp_storage: Dict[str, dict] = {}
+signup_otp_storage: Dict[str, dict] = {}
+# email -> datetime when the verified status expires (10 min after OTP verify).
+verified_emails: Dict[str, datetime] = {}
 
 _users_cont = None
 
@@ -129,6 +132,20 @@ class ResetPasswordRequest(BaseModel):
     new_password: str
 
 
+class DeleteAccountRequest(BaseModel):
+    confirm_password: str
+
+
+OTP_TTL = timedelta(minutes=5)
+# How long a verified email stays valid for signup after OTP verification.
+VERIFIED_TTL = timedelta(minutes=10)
+
+
+def _generate_otp() -> str:
+    """Cryptographically secure 6-digit OTP (000000–999999)."""
+    return f"{secrets.randbelow(10**6):06d}"
+
+
 def send_otp_email(target_email: str, otp: str, subject_prefix: str):
     sender_email = os.getenv("EMAIL_SENDER")
     sender_password = os.getenv("EMAIL_PASSWORD")
@@ -179,21 +196,45 @@ def send_signup_otp(req: OTPRequest):
     if exists:
         raise HTTPException(status_code=400, detail="Email already registered. Please log in.")
 
-    otp = str(random.randint(100000, 999999))
-    signup_otp_storage[req.email] = otp
+    otp = _generate_otp()
+    signup_otp_storage[req.email] = {
+        "otp": otp,
+        "expires_at": datetime.now(timezone.utc) + OTP_TTL,
+    }
     send_otp_email(req.email, otp, "Signup Verification")
     return {"status": "success", "message": "Verification OTP sent successfully."}
 
 
 @app.post("/verify-signup-otp")
 def verify_signup_otp(req: OTPVerifyRequest):
-    if signup_otp_storage.get(req.email) != req.otp:
-        raise HTTPException(status_code=400, detail="Invalid or expired verification OTP")
+    entry = signup_otp_storage.get(req.email)
+    if not entry or entry.get("otp") != req.otp:
+        raise HTTPException(status_code=400, detail="Invalid verification OTP.")
+    if datetime.now(timezone.utc) >= entry["expires_at"]:
+        signup_otp_storage.pop(req.email, None)
+        raise HTTPException(
+            status_code=400,
+            detail="Verification OTP has expired. Please request a new one.",
+        )
+
+    # Mark the email verified for a limited window so the user doesn't have to
+    # sign up immediately. The OTP itself is single-use — consume it now.
+    verified_emails[req.email] = datetime.now(timezone.utc) + VERIFIED_TTL
+    signup_otp_storage.pop(req.email, None)
     return {"status": "success", "message": "Email verified successfully."}
 
 
 @app.post("/signup")
 def signup(user: UserSignup):
+    # Require a still-valid email verification (set by /verify-signup-otp).
+    verified_until = verified_emails.get(user.email)
+    if not verified_until or datetime.now(timezone.utc) >= verified_until:
+        verified_emails.pop(user.email, None)
+        raise HTTPException(
+            status_code=403,
+            detail="Email not verified. Please verify your OTP first.",
+        )
+
     users_cont = get_users_container()
     exists = list(
         users_cont.query_items(
@@ -215,6 +256,8 @@ def signup(user: UserSignup):
         "createdAt": datetime.now(timezone.utc).isoformat(),
     }
     users_cont.create_item(user_doc)
+    # Single-use: consume the verification so it can't seed another signup.
+    verified_emails.pop(user.email, None)
     signup_otp_storage.pop(user.email, None)
     return {"status": "success", "message": "Account created"}
 
@@ -256,19 +299,35 @@ def forgot_password(req: ForgotPasswordRequest):
             enable_cross_partition_query=True,
         )
     )
+    # Always return the same generic response so callers cannot tell whether the
+    # email is registered (prevents user enumeration).
+    generic_response = {
+        "status": "success",
+        "message": "If an account exists for that email, a reset OTP has been sent.",
+    }
     if not user_list:
-        return {"status": "success", "message": "If email exists, OTP sent."}
+        return generic_response
 
-    otp = str(random.randint(100000, 999999))
-    otp_storage[req.email] = otp
+    otp = _generate_otp()
+    otp_storage[req.email] = {
+        "otp": otp,
+        "expires_at": datetime.now(timezone.utc) + OTP_TTL,
+    }
     send_otp_email(req.email, otp, "Password Reset")
-    return {"status": "success", "message": "OTP sent successfully."}
+    return generic_response
 
 
 @app.post("/reset-password")
 def reset_password(req: ResetPasswordRequest):
-    if otp_storage.get(req.email) != req.otp:
-        raise HTTPException(status_code=400, detail="Invalid or expired OTP")
+    entry = otp_storage.get(req.email)
+    if not entry or entry.get("otp") != req.otp:
+        raise HTTPException(status_code=400, detail="Invalid OTP.")
+    if datetime.now(timezone.utc) >= entry["expires_at"]:
+        # Expired — clear it so it can't be retried.
+        otp_storage.pop(req.email, None)
+        raise HTTPException(
+            status_code=400, detail="OTP has expired. Please request a new one."
+        )
 
     users_cont = get_users_container()
     user_list = list(
@@ -286,8 +345,104 @@ def reset_password(req: ResetPasswordRequest):
         req.new_password.encode("utf-8"), bcrypt.gensalt()
     ).decode("utf-8")
     users_cont.upsert_item(user_doc)
+    # Invalidate the OTP immediately after a successful reset to prevent reuse.
     otp_storage.pop(req.email, None)
     return {"status": "success", "message": "Password updated successfully!"}
+
+
+def _delete_user_transcripts(user_id: str) -> int:
+    """Best-effort cascade: remove any cloud transcripts owned by this user.
+
+    Transcripts are now stored locally on the user's PC, so the cloud
+    transcripts container typically does not exist. This stays defensive: if a
+    transcripts container IS present (legacy data / forward-compat), it deletes
+    every doc whose userId matches; if not, it returns 0 without failing the
+    account deletion. We never create the container here.
+    """
+    if not (COSMOS_ENDPOINT and COSMOS_KEY and DATABASE_NAME):
+        return 0
+    try:
+        client = CosmosClient(COSMOS_ENDPOINT, COSMOS_KEY)
+        database = client.get_database_client(DATABASE_NAME)
+        container = database.get_container_client(
+            os.getenv("COSMOS_TRANSCRIPTS_CONTAINER", "transcripts")
+        )
+        items = list(
+            container.query_items(
+                "SELECT c.id, c.userId FROM c WHERE c.userId = @uid",
+                parameters=[{"name": "@uid", "value": user_id}],
+                enable_cross_partition_query=True,
+            )
+        )
+        deleted = 0
+        for it in items:
+            try:
+                container.delete_item(
+                    item=it["id"], partition_key=it.get("userId", user_id)
+                )
+                deleted += 1
+            except Exception:
+                pass
+        return deleted
+    except Exception:
+        # Container missing or any other error — nothing to cascade.
+        return 0
+
+
+@app.delete("/delete-account")
+def delete_account(
+    req: DeleteAccountRequest,
+    user: dict = Depends(get_current_user),
+):
+    email = user.get("sub")
+    if not email:
+        raise HTTPException(status_code=401, detail="Invalid authentication token")
+
+    users_cont = get_users_container()
+    user_list = list(
+        users_cont.query_items(
+            "SELECT * FROM c WHERE c.email = @email",
+            parameters=[{"name": "@email", "value": email}],
+            enable_cross_partition_query=True,
+        )
+    )
+    if not user_list:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    user_doc = user_list[0]
+
+    # Re-verify the password to prevent accidental/malicious deletion.
+    stored_hash = (user_doc.get("password") or "").encode("utf-8")
+    if not stored_hash or not bcrypt.checkpw(
+        req.confirm_password.encode("utf-8"), stored_hash
+    ):
+        raise HTTPException(status_code=401, detail="Incorrect password.")
+
+    # Cascade: remove associated cloud transcripts (best-effort), then the user.
+    deleted_transcripts = _delete_user_transcripts(email)
+
+    try:
+        # Resolve the container's partition key dynamically so delete_item works
+        # regardless of whether it's /email, /id, /tenantId, etc.
+        props = users_cont.read()
+        pk_path = (props.get("partitionKey", {}).get("paths") or ["/id"])[0]
+        pk_value = user_doc.get(pk_path.strip("/"), user_doc.get("id"))
+        users_cont.delete_item(item=user_doc["id"], partition_key=pk_value)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to delete account: {exc}")
+
+    # Drop any pending auth state for this email so nothing lingers.
+    verified_emails.pop(email, None)
+    otp_storage.pop(email, None)
+    signup_otp_storage.pop(email, None)
+
+    return {
+        "status": "success",
+        "message": "Account deleted.",
+        "transcripts_deleted": deleted_transcripts,
+    }
 
 
 @app.get("/azure/token")
