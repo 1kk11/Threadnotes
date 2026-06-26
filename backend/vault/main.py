@@ -53,12 +53,10 @@ _env_log = logging.getLogger("threadnotes.env")
 
 @app.on_event("startup")
 def _diagnose_env():
-    """Log presence + length of critical env vars at startup. Never logs the
-    actual secret values — only whether they're set and how long they are."""
+    """Log presence + length of critical env vars and the presence/size of the
+    Gmail secret files at startup. Never logs the actual secret values or file
+    contents — only whether they're set/exist and how large they are."""
     for key in (
-        "GOOGLE_CLIENT_ID",
-        "GOOGLE_CLIENT_SECRET",
-        "GOOGLE_REFRESH_TOKEN",
         "GMAIL_SENDER",
         "JWT_SECRET",
         "COSMOS_ENDPOINT",
@@ -73,6 +71,21 @@ def _diagnose_env():
             key,
             bool(val),
             len(val) if val else 0,
+        )
+
+    # Gmail OAuth secret files (Render Secret Files). Log existence + size only.
+    for label, path in (
+        ("credentials.json", GMAIL_CREDENTIALS_PATH),
+        ("token.json", GMAIL_TOKEN_PATH),
+    ):
+        exists = os.path.exists(path)
+        size = os.path.getsize(path) if exists else 0
+        _env_log.info(
+            "FILE %-16s path=%s exists=%-5s bytes=%s",
+            label,
+            path,
+            exists,
+            size,
         )
 
 
@@ -176,40 +189,47 @@ def _generate_otp() -> str:
 
 
 GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.send"]
-GOOGLE_TOKEN_URI = "https://oauth2.googleapis.com/token"
+# Render mounts Google OAuth secrets as read-only files under /etc/secrets.
+# Paths are overridable via env so this also works locally.
+GMAIL_CREDENTIALS_PATH = os.getenv(
+    "GMAIL_CREDENTIALS_PATH", "/etc/secrets/credentials.json"
+)
+GMAIL_TOKEN_PATH = os.getenv("GMAIL_TOKEN_PATH", "/etc/secrets/token.json")
 _gmail_service = None
 
 
 def _build_gmail_service():
-    """Build an authenticated Gmail API client from env-var OAuth credentials.
+    """Build an authenticated Gmail API client from on-disk OAuth secret files.
 
-    Uses GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET / GOOGLE_REFRESH_TOKEN (a
-    long-lived refresh token minted once via the OAuth consent flow). Sends over
-    HTTPS via the Gmail API — no SMTP ports, so it works on Render where SMTP is
-    blocked. Imports are lazy so a missing google lib can't crash app startup.
+    Loads the authorized-user token from token.json (which carries the refresh
+    token + client id/secret minted once via the OAuth consent flow). Refreshes
+    silently in-memory when the access token is expired. We never write the
+    refreshed token back — on Render the secret files are read-only, and the
+    in-memory refresh is enough. No interactive/browser flow on the server.
+    Imports are lazy so a missing google lib can't crash app startup.
     """
-    client_id = os.getenv("GOOGLE_CLIENT_ID")
-    client_secret = os.getenv("GOOGLE_CLIENT_SECRET")
-    refresh_token = os.getenv("GOOGLE_REFRESH_TOKEN")
-    if not (client_id and client_secret and refresh_token):
+    if not os.path.exists(GMAIL_TOKEN_PATH):
         raise HTTPException(
             status_code=500,
-            detail="Google API email credentials are not configured.",
+            detail=f"Gmail token file not found at {GMAIL_TOKEN_PATH}.",
         )
 
     from google.oauth2.credentials import Credentials
     from google.auth.transport.requests import Request
     from googleapiclient.discovery import build
 
-    creds = Credentials(
-        token=None,
-        refresh_token=refresh_token,
-        client_id=client_id,
-        client_secret=client_secret,
-        token_uri=GOOGLE_TOKEN_URI,
-        scopes=GMAIL_SCOPES,
-    )
-    creds.refresh(Request())  # exchange the refresh token for an access token
+    creds = Credentials.from_authorized_user_file(GMAIL_TOKEN_PATH, GMAIL_SCOPES)
+
+    if not creds.valid:
+        if creds.expired and creds.refresh_token:
+            creds.refresh(Request())  # in-memory only; secret file stays read-only
+        else:
+            raise HTTPException(
+                status_code=500,
+                detail="Gmail credentials are invalid and cannot be refreshed. "
+                "Regenerate token.json and re-upload it as a Render secret file.",
+            )
+
     return build("gmail", "v1", credentials=creds, cache_discovery=False)
 
 
