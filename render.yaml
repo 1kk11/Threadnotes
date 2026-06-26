@@ -4,7 +4,7 @@ services:
     env: python
     plan: free
     autoDeploy: true
-    buildCommand: pip install -r backend/vault/requirements-vault.txt
+    buildCommand: pip install -r requirements.txt
     startCommand: uvicorn backend.vault.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /docs
     envVars:
@@ -32,8 +32,10 @@ services:
         sync: false
       - key: COSMOS_DATABASE
         sync: false
-      # Gmail OTP (signup / password reset)
-      - key: EMAIL_SENDER
-        sync: false
-      - key: EMAIL_PASSWORD
-        sync: false
+      # Gmail OTP (signup / password reset) now uses the Gmail API via OAuth
+      # secret files (credentials.json / token.json), NOT SMTP env vars.
+      # Optional overrides for where those files are mounted:
+      # - key: GMAIL_CREDENTIALS_PATH
+      #   sync: false
+      # - key: GMAIL_TOKEN_PATH
+      #   sync: false

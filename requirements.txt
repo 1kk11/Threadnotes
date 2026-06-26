@@ -1,0 +1,32 @@
+# ─── ThreadNotes Cloud Vault — single merged requirements (root) ───
+# Installed by Render via:  pip install -r requirements.txt
+
+# Web framework
+fastapi==0.115.0
+uvicorn[standard]==0.38.0
+python-multipart==0.0.9
+
+# Validation / settings  (pydantic[email] provides EmailStr + email-validator)
+pydantic[email]==2.9.2
+pydantic-settings==2.10.1
+email-validator
+
+# Auth
+bcrypt==4.1.2
+PyJWT==2.8.0
+python-dotenv==1.0.1
+
+# Database & external APIs
+azure-cosmos==4.5.1
+openai==2.43.0
+httpx==0.24.1
+
+# Gmail API for OTP email (sends over HTTPS — no SMTP ports)
+google-api-python-client==2.130.0
+google-auth
+google-auth-httplib2==0.2.0
+google-auth-oauthlib==1.2.0
+
+# Legacy document/audio helpers (from old backend/requirements.txt)
+pydub
+python-docx

@@ -1,0 +1,9 @@
+# Gmail API OAuth secrets — NEVER commit these
+credentials.json
+token.json
+backend/credentials.json
+backend/token.json
+
+# Environment / secrets
+.env
+.env.*

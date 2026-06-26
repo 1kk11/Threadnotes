@@ -189,12 +189,17 @@ def _generate_otp() -> str:
 
 
 GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.send"]
-# Render mounts Google OAuth secrets as read-only files under /etc/secrets.
-# Paths are overridable via env so this also works locally.
+# backend/ dir = one level up from this file (backend/vault/main.py -> backend/),
+# resolved from __file__ so it doesn't depend on the process working directory.
+# credentials.json / token.json physically live in backend/. Both paths stay
+# env-overridable (e.g. GMAIL_TOKEN_PATH=/etc/secrets/token.json on Render).
+_BACKEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 GMAIL_CREDENTIALS_PATH = os.getenv(
-    "GMAIL_CREDENTIALS_PATH", "/etc/secrets/credentials.json"
+    "GMAIL_CREDENTIALS_PATH", os.path.join(_BACKEND_DIR, "credentials.json")
 )
-GMAIL_TOKEN_PATH = os.getenv("GMAIL_TOKEN_PATH", "/etc/secrets/token.json")
+GMAIL_TOKEN_PATH = os.getenv(
+    "GMAIL_TOKEN_PATH", os.path.join(_BACKEND_DIR, "token.json")
+)
 _gmail_service = None
 
 
