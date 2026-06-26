@@ -348,6 +348,149 @@ def _is_noise_fragment(text: str) -> bool:
     return False
 
 
+def _create_diarized_transcription(client, deployment, safe_name, audio_bytes, mime):
+    """Call the diarization model, attempting to pass the steering prompt.
+
+    Some gpt-4o-transcribe-diarize deployments reject the `prompt` parameter
+    with invalid_request_error. We try WITH the prompt (so the model is told to
+    focus on primary speakers and ignore background noise / transient crosstalk)
+    and transparently retry WITHOUT it if the deployment doesn't accept it — so
+    we never hard-fail just because the prompt field is unsupported.
+    """
+    base = dict(
+        model=deployment,
+        file=(safe_name, audio_bytes, mime),
+        response_format="diarized_json",
+        extra_body={"chunking_strategy": "auto"},
+    )
+    try:
+        return client.audio.transcriptions.create(prompt=DIARIZATION_PROMPT, **base)
+    except Exception as exc:
+        msg = str(exc).lower()
+        prompt_rejected = any(
+            k in msg
+            for k in (
+                "prompt",
+                "unrecognized",
+                "unsupported",
+                "unexpected",
+                "invalid_request",
+                "400",
+            )
+        )
+        if prompt_rejected:
+            return client.audio.transcriptions.create(**base)
+        raise
+
+
+# --- Dynamic ghost-speaker cleanup ------------------------------------------
+# A "ghost" is a speaker whose ENTIRE contribution to the recording is trivially
+# small — a few words AND a very short total speaking time. These are the
+# coughs / "Hmm" / "Yeah" crosstalk the model over-segments into new speakers.
+# Thresholds are absolute per-speaker FLOORS (plus a relative check), NOT a cap
+# on the number of speakers — a real 2/4/8-participant meeting keeps every
+# genuine speaker no matter how many there are.
+GHOST_MAX_WORDS = 3          # <= this many words total ...
+GHOST_MAX_DURATION = 2.0     # ... AND <= this many seconds total => ghost
+GHOST_RELATIVE_RATIO = 0.08  # also a ghost if < 8% of the busiest speaker's words
+
+
+def _speaker_stats(segments: List[dict]) -> Dict[str, dict]:
+    stats: Dict[str, dict] = {}
+    for i, seg in enumerate(segments):
+        sp = seg["speaker"]
+        s = stats.setdefault(
+            sp, {"words": 0, "duration": 0.0, "segments": 0, "first": i}
+        )
+        s["words"] += len(seg.get("words") or [])
+        s["duration"] += max(0.0, float(seg["end"]) - float(seg["start"]))
+        s["segments"] += 1
+    return stats
+
+
+def _identify_ghost_speakers(stats: Dict[str, dict]) -> set:
+    if len(stats) <= 1:
+        return set()
+    max_words = max((s["words"] for s in stats.values()), default=0) or 1
+    ghosts = set()
+    for sp, s in stats.items():
+        absolute_ghost = (
+            s["words"] <= GHOST_MAX_WORDS and s["duration"] <= GHOST_MAX_DURATION
+        )
+        relative_ghost = (
+            s["words"] < GHOST_RELATIVE_RATIO * max_words
+            and s["duration"] <= GHOST_MAX_DURATION
+        )
+        if absolute_ghost or relative_ghost:
+            ghosts.add(sp)
+    # Safety: never flag EVERY speaker as a ghost — always keep the busiest one.
+    if len(ghosts) >= len(stats):
+        busiest = max(
+            stats, key=lambda sp: (stats[sp]["words"], stats[sp]["duration"])
+        )
+        ghosts.discard(busiest)
+    return ghosts
+
+
+def _nearest_primary_label(segments: List[dict], idx: int, ghosts: set):
+    """Speaker label of the temporally nearest non-ghost segment (prev wins ties)."""
+    n = len(segments)
+    for dist in range(1, n):
+        before = idx - dist
+        if before >= 0 and segments[before]["speaker"] not in ghosts:
+            return segments[before]["speaker"]
+        after = idx + dist
+        if after < n and segments[after]["speaker"] not in ghosts:
+            return segments[after]["speaker"]
+    return None
+
+
+def _merge_ghost_speakers(segments: List[dict]) -> List[dict]:
+    """Reassign ghost-speaker segments to the nearest primary speaker, then
+    coalesce consecutive same-speaker segments into single blocks.
+
+    Word-level {word, start, end} entries are carried over VERBATIM (never
+    recomputed or reordered), so frontend karaoke highlighting stays exact.
+    """
+    if len(segments) < 2:
+        return segments
+
+    ghosts = _identify_ghost_speakers(_speaker_stats(segments))
+    if not ghosts:
+        return segments
+
+    # 1) Relabel each ghost segment to its nearest primary speaker.
+    for i, seg in enumerate(segments):
+        if seg["speaker"] in ghosts:
+            target = _nearest_primary_label(segments, i, ghosts)
+            if target is not None:
+                seg["speaker"] = target
+
+    # 2) Coalesce now-adjacent same-speaker segments into one speech block.
+    merged: List[dict] = []
+    for seg in segments:
+        if merged and merged[-1]["speaker"] == seg["speaker"]:
+            prev = merged[-1]
+            prev["text"] = f'{prev["text"]} {seg["text"]}'.strip()
+            prev["words"] = (prev.get("words") or []) + (seg.get("words") or [])
+            prev["start"] = round(min(float(prev["start"]), float(seg["start"])), 3)
+            prev["end"] = round(max(float(prev["end"]), float(seg["end"])), 3)
+        else:
+            merged.append(dict(seg))
+    return merged
+
+
+def _renumber_speakers(segments: List[dict]) -> List[dict]:
+    """Remap speaker labels to contiguous 'Speaker 1..N' by first appearance."""
+    remap: Dict[str, str] = {}
+    for seg in segments:
+        sp = seg["speaker"]
+        if sp not in remap:
+            remap[sp] = f"Speaker {len(remap) + 1}"
+        seg["speaker"] = remap[sp]
+    return segments
+
+
 def _run_diarization(audio_bytes: bytes, filename: str, content_type: str = "") -> list:
     client = build_openai_client()
     deployment = os.getenv("AZURE_DIARIZE_DEPLOYMENT", "gpt-4o-transcribe-diarize").strip()
@@ -355,11 +498,8 @@ def _run_diarization(audio_bytes: bytes, filename: str, content_type: str = "") 
     safe_name = filename or "audio.ogg"
     mime = content_type or "audio/ogg"
 
-    resp = client.audio.transcriptions.create(
-        model=deployment,
-        file=(safe_name, audio_bytes, mime),
-        response_format="diarized_json",
-        extra_body={"chunking_strategy": "auto"},
+    resp = _create_diarized_transcription(
+        client, deployment, safe_name, audio_bytes, mime
     )
     data = (
         resp.model_dump()
@@ -418,6 +558,12 @@ def _run_diarization(audio_bytes: bytes, filename: str, content_type: str = "") 
                 "words": words,
             }
         )
+
+    # Dynamic cleanup: fold hallucinated "ghost" speakers (coughs, "Hmm",
+    # transient crosstalk) into the nearest real speaker, then renumber the
+    # surviving speakers 1..N. No fixed speaker cap — real participants are kept.
+    segments = _merge_ghost_speakers(segments)
+    segments = _renumber_speakers(segments)
     return segments
 
 
