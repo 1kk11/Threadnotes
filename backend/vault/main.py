@@ -6,6 +6,7 @@ import logging
 import os
 import re
 import secrets
+import traceback
 import uuid
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -212,30 +213,49 @@ def _build_gmail_service():
     refreshed token back — on Render the secret files are read-only, and the
     in-memory refresh is enough. No interactive/browser flow on the server.
     Imports are lazy so a missing google lib can't crash app startup.
+
+    Aggressive logging: any failure (FileNotFoundError, RefreshError from an
+    expired/revoked token, etc.) is printed with a full traceback to the server
+    logs before an HTTPException is raised, so the real cause is visible.
     """
-    if not os.path.exists(GMAIL_TOKEN_PATH):
-        raise HTTPException(
-            status_code=500,
-            detail=f"Secret file not found at {GMAIL_TOKEN_PATH}",
-        )
-
-    from google.oauth2.credentials import Credentials
-    from google.auth.transport.requests import Request
-    from googleapiclient.discovery import build
-
-    creds = Credentials.from_authorized_user_file(GMAIL_TOKEN_PATH, GMAIL_SCOPES)
-
-    if not creds.valid:
-        if creds.expired and creds.refresh_token:
-            creds.refresh(Request())  # in-memory only; secret file stays read-only
-        else:
+    try:
+        print(f"[GMAIL] building service — token path: {GMAIL_TOKEN_PATH}")
+        if not os.path.exists(GMAIL_TOKEN_PATH):
             raise HTTPException(
                 status_code=500,
-                detail="Gmail credentials are invalid and cannot be refreshed. "
-                "Regenerate token.json and re-upload it as a Render secret file.",
+                detail=f"Secret file not found at {GMAIL_TOKEN_PATH}",
             )
 
-    return build("gmail", "v1", credentials=creds, cache_discovery=False)
+        from google.oauth2.credentials import Credentials
+        from google.auth.transport.requests import Request
+        from googleapiclient.discovery import build
+
+        creds = Credentials.from_authorized_user_file(GMAIL_TOKEN_PATH, GMAIL_SCOPES)
+
+        if not creds.valid:
+            if creds.expired and creds.refresh_token:
+                print("[GMAIL] access token expired — refreshing via refresh_token")
+                creds.refresh(Request())  # in-memory only; secret file stays read-only
+            else:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Gmail credentials are invalid and cannot be refreshed. "
+                    "Regenerate token.json and re-upload it as a Render secret file.",
+                )
+
+        service = build("gmail", "v1", credentials=creds, cache_discovery=False)
+        print("[GMAIL] service built successfully")
+        return service
+    except Exception as e:
+        traceback.print_exc()
+        print(f"CRITICAL GMAIL ERROR: {repr(e)}")
+        # Preserve descriptive HTTPExceptions (missing file / unrefreshable creds);
+        # wrap anything else (RefreshError, FileNotFoundError, ...) with its repr.
+        if isinstance(e, HTTPException):
+            raise
+        raise HTTPException(
+            status_code=500, detail=f"Gmail service initialization failed: {repr(e)}"
+        )
 
 
 def _get_gmail_service():
@@ -247,23 +267,32 @@ def _get_gmail_service():
 
 
 def send_otp_email(target_email: str, otp: str, subject_prefix: str):
-    service = _get_gmail_service()  # raises HTTP 500 if credentials are missing
-
-    msg = MIMEMultipart()
-    sender = os.getenv("GMAIL_SENDER")
-    if sender:
-        msg["From"] = sender
-    msg["To"] = target_email
-    msg["Subject"] = f"ThreadNotes - {subject_prefix} OTP"
-    body = f"Your OTP for {subject_prefix} is: {otp}\n\nPlease do not share this with anyone."
-    msg.attach(MIMEText(body, "plain"))
-
-    raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
     try:
-        service.users().messages().send(userId="me", body={"raw": raw}).execute()
-    except Exception as exc:
+        service = _get_gmail_service()  # may raise HTTP 500 (creds/file issues)
+
+        msg = MIMEMultipart()
+        sender = os.getenv("GMAIL_SENDER")
+        if sender:
+            msg["From"] = sender
+        msg["To"] = target_email
+        msg["Subject"] = f"ThreadNotes - {subject_prefix} OTP"
+        body = f"Your OTP for {subject_prefix} is: {otp}\n\nPlease do not share this with anyone."
+        msg.attach(MIMEText(body, "plain"))
+
+        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+        result = service.users().messages().send(
+            userId="me", body={"raw": raw}
+        ).execute()
+        print(f"[GMAIL] OTP email sent to {target_email} — id={result.get('id')}")
+    except Exception as e:
+        traceback.print_exc()
+        print(f"CRITICAL GMAIL ERROR: {repr(e)}")
+        # Preserve a descriptive HTTPException from _get_gmail_service; otherwise
+        # surface the underlying send error (HttpError, RefreshError, ...).
+        if isinstance(e, HTTPException):
+            raise
         raise HTTPException(
-            status_code=502, detail=f"Failed to send email via Gmail API: {exc}"
+            status_code=502, detail=f"Failed to send email via Gmail API: {repr(e)}"
         )
 
 
