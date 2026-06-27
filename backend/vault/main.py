@@ -118,14 +118,19 @@ def build_openai_client():
     key = (os.getenv("AZURE_OPENAI_KEY") or os.getenv("OPENAI_API_KEY") or "").strip()
     if not key:
         raise HTTPException(status_code=500, detail="OpenAI/Azure OpenAI key is missing in the vault.")
+    # timeout=1500s gives a long (~23 min) chunk enough time to fully diarize
+    # without the client cutting it off mid-process. max_retries=0 so a failure
+    # surfaces IMMEDIATELY with a clear reason instead of silently re-uploading
+    # and re-processing the whole chunk 2-3 more times (which looked like a hang).
     if endpoint:
         return AzureOpenAI(
             api_key=key,
             api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2025-04-01-preview").strip(),
             azure_endpoint=endpoint,
-            timeout=300,
+            timeout=1500,
+            max_retries=0,
         )
-    return OpenAI(api_key=key, timeout=300)
+    return OpenAI(api_key=key, timeout=1500, max_retries=0)
 
 
 def interpolate_words(text: str, start: float, end: float) -> list:
@@ -650,6 +655,57 @@ def _create_diarized_transcription(client, deployment, safe_name, audio_bytes, m
         raise
 
 
+def _friendly_diarize_error(exc: Exception) -> str:
+    """Translate a raw transcription/diarization exception into a short, plain
+    English sentence safe to show the end user — no stack traces, status codes,
+    or SDK jargon. Used for BOTH live-recording and uploaded-file diarization
+    (they share the /diarize/stream endpoint)."""
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    name = type(exc).__name__.lower()
+    msg = str(exc).lower()
+
+    # Client cut the call off — the audio took longer than the time limit.
+    if "timeout" in name or "timed out" in msg or status == 408:
+        return (
+            "This recording is too long to process in one go and timed out. "
+            "Please try a shorter recording, or split it into smaller parts."
+        )
+    # Couldn't reach the transcription service at all.
+    if "connection" in name or "connect" in msg:
+        return (
+            "We couldn't reach the transcription service. "
+            "Please check your internet connection and try again."
+        )
+    # Service is overloaded / quota hit.
+    if status == 429 or "rate limit" in msg or "ratelimit" in name:
+        return (
+            "The transcription service is busy right now. "
+            "Please wait a minute and try again."
+        )
+    # Authentication / permission problems (config issue, not the user's fault).
+    if status in (401, 403) or "authentication" in name or "permission" in name:
+        return (
+            "The transcription service rejected our credentials. "
+            "Please contact support — this is a configuration issue, not your file."
+        )
+    # Bad input — usually audio too long for the model, or unsupported/corrupt.
+    if status == 400 or "bad request" in msg or "invalid" in msg:
+        if "duration" in msg or "1500" in msg or "too long" in msg:
+            return (
+                "This audio is too long for the transcription model. "
+                "Please use a shorter recording or file."
+            )
+        return (
+            "This audio couldn't be processed. It may be in an unsupported "
+            "format or corrupted. Please try a different file."
+        )
+    # Anything else.
+    return (
+        "Something went wrong while transcribing this audio. "
+        "Please try again in a moment."
+    )
+
+
 # --- Dynamic ghost-speaker cleanup ------------------------------------------
 # A "ghost" is a speaker whose ENTIRE contribution to the recording is trivially
 # small — a few words AND a very short total speaking time. These are the
@@ -852,7 +908,10 @@ async def diarize_stream(
     except HTTPException:
         raise
     except Exception as exc:
-        return {"status": "error", "message": str(exc)}
+        # Log the full technical detail server-side; return only a clean,
+        # human-readable English sentence to the client (live + upload both).
+        traceback.print_exc()
+        return {"status": "error", "message": _friendly_diarize_error(exc)}
 
     # Cloud Vault is a stateless proxy for the OpenAI/Azure diarization call only.
     # Transcripts are NEVER persisted in Cosmos DB — the renderer saves them to the
