@@ -36,7 +36,9 @@ export default function RootLayout({
         {/* Global providers wrap kiye hain taaki recording aur audio persist kare[cite: 10] */}
         <GlobalAudioProvider>
           <GlobalRecordingProvider>
-            <div className="h-[100dvh] w-full">
+            {/* Fixed viewport shell: exactly one screen tall/wide, clipped.
+                Every page mounts inside this and manages its own inner scroll. */}
+            <div className="h-[100dvh] w-screen overflow-hidden">
               <AuthInterceptor />
               {children}
             </div>

@@ -2,7 +2,7 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import Calendar from "react-calendar";
 import "react-calendar/dist/Calendar.css";
-import { Download } from "lucide-react"; // FIX: Share2 replaced with Download
+import { Download, CalendarDays } from "lucide-react";
 import { loadMeetings, saveMeetings, MEETINGS_EVENT } from "@/lib/meetingStore";
 
 type TranscriptEntry = { speaker: string; text: string; timestamp: string };
@@ -28,6 +28,7 @@ export default function MyMeetings() {
   const debouncedSearch = useDebounce(search, 300);
   const [selectedMeeting, setSelectedMeeting] = useState<Meeting | null>(null);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  const [isCalendarOpen, setIsCalendarOpen] = useState(false);
 
   const [meetingToDelete, setMeetingToDelete] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -100,6 +101,7 @@ export default function MyMeetings() {
         searchInputRef.current?.focus();
       }
       if (e.key === "Escape" && selectedMeeting) setSelectedMeeting(null);
+      if (e.key === "Escape" && isCalendarOpen) setIsCalendarOpen(false);
     };
     document.addEventListener("keydown", handleKeyDown);
 
@@ -107,7 +109,7 @@ export default function MyMeetings() {
       window.removeEventListener(MEETINGS_EVENT, handleInstantRefresh);
       document.removeEventListener("keydown", handleKeyDown);
     };
-  }, [selectedMeeting]);
+  }, [selectedMeeting, isCalendarOpen]);
 
   const processedMeetings = useMemo(() => {
     let filtered = meetings;
@@ -145,6 +147,63 @@ export default function MyMeetings() {
     setMeetingToDelete(null);
   };
 
+  // Shared calendar UI — rendered in the desktop side panel AND the mobile drawer
+  // so both have identical functionality.
+  const calendarPanel = (
+    <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-6">
+      <div className="flex justify-between items-center mb-6">
+        <span className="text-sm font-bold text-slate-800">Date Filter</span>
+        {selectedDate && (
+          <button
+            onClick={() => setSelectedDate(null)}
+            className="text-[10px] font-bold text-red-500 hover:text-red-700 uppercase tracking-widest bg-red-50 px-2 py-1 rounded"
+          >
+            Clear Filter
+          </button>
+        )}
+      </div>
+
+      <Calendar
+        onChange={(date) => {
+          const d = date as Date;
+          const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+          setSelectedDate(dateStr);
+          setIsCalendarOpen(false); // close the mobile drawer after picking (no-op on desktop)
+        }}
+        value={selectedDate ? new Date(selectedDate) : null}
+        tileContent={({ date, view }) => {
+          if (view === "month") {
+            const dateStr = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+            if (datesWithMeetings.has(dateStr)) {
+              return (
+                <div className="flex justify-center mt-1">
+                  <span className="w-1.5 h-1.5 bg-[#e91e63] rounded-full"></span>
+                </div>
+              );
+            }
+          }
+          return null;
+        }}
+        tileClassName={({ date, view }) => {
+          if (view === "month") {
+            const dateStr = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+            if (selectedDate === dateStr)
+              return "bg-indigo-50 !rounded-lg text-indigo-700 font-bold border border-indigo-200";
+          }
+          return null;
+        }}
+        className="react-calendar-custom !w-full !border-none"
+      />
+
+      <div className="mt-6 pt-4 border-t border-slate-100 flex items-center gap-2">
+        <span className="w-2.5 h-2.5 bg-[#e91e63] rounded-full"></span>
+        <span className="text-[11px] font-bold text-slate-500 uppercase tracking-widest">
+          Session Held
+        </span>
+      </div>
+    </div>
+  );
+
   return (
     <div className="flex-1 overflow-y-auto overflow-x-hidden bg-slate-50/50 p-4 sm:p-6 lg:p-8 relative w-full h-full custom-scrollbar">
       <div className="max-w-7xl mx-auto w-full h-full flex flex-col">
@@ -157,7 +216,8 @@ export default function MyMeetings() {
         <div className="flex flex-col lg:flex-row gap-8 flex-1 min-h-0 items-start">
           <div className="flex-1 flex flex-col w-full min-w-0 bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden h-full">
             <div className="p-4 border-b border-slate-100 bg-slate-50/50 shrink-0">
-              <div className="relative w-full">
+              <div className="flex items-center gap-2">
+                <div className="relative min-w-0 flex-1">
                 <div className="absolute inset-y-0 left-4 flex items-center pointer-events-none">
                   <svg
                     className="w-4 h-4 text-slate-400"
@@ -181,6 +241,18 @@ export default function MyMeetings() {
                   onChange={(e) => setSearch(e.target.value)}
                   className="w-full pl-11 pr-4 py-3 text-sm bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 text-slate-900 transition-all font-medium placeholder:text-slate-400 shadow-sm"
                 />
+                </div>
+                {/* Calendar toggle — mobile/tablet only; opens the calendar drawer. */}
+                <button
+                  onClick={() => setIsCalendarOpen(true)}
+                  aria-label="Open calendar filter"
+                  className="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-500 shadow-sm transition-colors hover:border-indigo-300 hover:text-indigo-600 lg:hidden"
+                >
+                  <CalendarDays className="h-5 w-5" />
+                  {selectedDate && (
+                    <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-indigo-500 ring-2 ring-white" />
+                  )}
+                </button>
               </div>
             </div>
 
@@ -253,63 +325,33 @@ export default function MyMeetings() {
             </div>
           </div>
 
-          <div className="w-full lg:w-[350px] shrink-0 sticky top-0">
-            <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-6">
-              <div className="flex justify-between items-center mb-6">
-                <span className="text-sm font-bold text-slate-800">
-                  Date Filter
-                </span>
-                {selectedDate && (
-                  <button
-                    onClick={() => setSelectedDate(null)}
-                    className="text-[10px] font-bold text-red-500 hover:text-red-700 uppercase tracking-widest bg-red-50 px-2 py-1 rounded"
-                  >
-                    Clear Filter
-                  </button>
-                )}
-              </div>
-
-              <Calendar
-                onChange={(date) => {
-                  const d = date as Date;
-                  const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-                  setSelectedDate(dateStr);
-                }}
-                value={selectedDate ? new Date(selectedDate) : null}
-                tileContent={({ date, view }) => {
-                  if (view === "month") {
-                    const dateStr = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-                    if (datesWithMeetings.has(dateStr)) {
-                      return (
-                        <div className="flex justify-center mt-1">
-                          <span className="w-1.5 h-1.5 bg-[#e91e63] rounded-full"></span>
-                        </div>
-                      );
-                    }
-                  }
-                  return null;
-                }}
-                tileClassName={({ date, view }) => {
-                  if (view === "month") {
-                    const dateStr = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-                    if (selectedDate === dateStr)
-                      return "bg-indigo-50 !rounded-lg text-indigo-700 font-bold border border-indigo-200";
-                  }
-                  return null;
-                }}
-                className="react-calendar-custom !w-full !border-none"
-              />
-
-              <div className="mt-6 pt-4 border-t border-slate-100 flex items-center gap-2">
-                <span className="w-2.5 h-2.5 bg-[#e91e63] rounded-full"></span>
-                <span className="text-[11px] font-bold text-slate-500 uppercase tracking-widest">
-                  Session Held
-                </span>
-              </div>
-            </div>
+          {/* Desktop calendar panel — hidden below lg (replaced by the icon toggle). */}
+          <div className="hidden lg:block w-full lg:w-[350px] shrink-0 sticky top-0">
+            {calendarPanel}
           </div>
         </div>
       </div>
+
+      {/* Mobile calendar drawer/overlay (lg:hidden) */}
+      {isCalendarOpen && (
+        <div
+          className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-sm lg:hidden animate-in fade-in duration-200"
+          onClick={() => setIsCalendarOpen(false)}
+        >
+          <div
+            className="w-full max-w-sm animate-in zoom-in-95 duration-200"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {calendarPanel}
+            <button
+              onClick={() => setIsCalendarOpen(false)}
+              className="mt-3 w-full rounded-xl bg-white py-3 text-sm font-bold text-slate-600 shadow-sm transition-colors hover:bg-slate-100"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      )}
 
       {meetingToDelete && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm animate-in fade-in duration-200">

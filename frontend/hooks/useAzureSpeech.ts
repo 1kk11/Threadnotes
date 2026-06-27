@@ -38,7 +38,10 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
   const renewTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioFilePathRef = useRef<string | null>(null);
-  const audioWriteChainRef = useRef<Promise<void>>(Promise.resolve());
+  // Collect MediaRecorder chunks in memory and write ONE complete file on stop.
+  // A single finalized blob always has a valid WebM header + duration, unlike
+  // per-chunk streamed appends which could land headerless/corrupt on some PCs.
+  const recordedChunksRef = useRef<Blob[]>([]);
   const qualityIntervalRef = useRef<ReturnType<typeof setInterval> | null>(
     null,
   );
@@ -315,25 +318,9 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
         mixedStream.getAudioTracks().length,
       );
 
-      let recordingFilePath: string | null = null;
-      if (typeof window !== "undefined" && window.electronAPI?.audioFileCreate) {
-        try {
-          recordingFilePath = await window.electronAPI.audioFileCreate();
-          audioFilePathRef.current = recordingFilePath;
-          audioWriteChainRef.current = Promise.resolve();
-          console.log(
-            "[Recorder] local recording file created at:",
-            recordingFilePath,
-          );
-        } catch (e) {
-          console.warn("[Recorder] Failed to create local recording file:", e);
-          recordingFilePath = null;
-        }
-      } else {
-        console.warn(
-          "[Recorder] electronAPI.audioFileCreate unavailable — running outside Electron? Audio will NOT be saved to disk.",
-        );
-      }
+      // Reset the in-memory chunk buffer; the file is written ONCE on stop.
+      recordedChunksRef.current = [];
+      audioFilePathRef.current = null;
 
       // Pin an explicitly-supported container so we don't get a silent
       // "no recorder for default type" failure on some Chromium builds.
@@ -360,50 +347,19 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
       recorder.onerror = (ev) =>
         console.error("[Recorder] MediaRecorder error event:", ev);
 
-      // NOTE: this handler is intentionally NOT async. It extends the write
-      // chain *synchronously* (reading the blob inside the chained .then) so
-      // that the final chunk emitted during recorder.stop() is guaranteed to
-      // be queued before finishAndUpload() awaits the chain — closing the
-      // end-of-recording flush race.
+      // Just buffer each chunk in memory — no disk writes here. On stop we
+      // combine them into one complete, valid WebM and write it once.
       recorder.ondataavailable = (e) => {
-        recordedChunksLength += 1;
         const size = e.data?.size ?? 0;
+        if (e.data && size > 0) {
+          recordedChunksRef.current.push(e.data);
+        }
+        recordedChunksLength += 1;
         console.log(
-          `[Recorder] chunk #${recordedChunksLength} — size: ${size} bytes, blob type: ${
+          `[Recorder] chunk #${recordedChunksLength} — size: ${size} bytes, type: ${
             e.data?.type || "(none)"
-          }, recordedChunks length: ${recordedChunksLength}`,
+          } (buffered: ${recordedChunksRef.current.length})`,
         );
-        if (!e.data || size === 0) {
-          console.warn(
-            "[Recorder] EMPTY chunk — MediaRecorder is not receiving audio from the mic/stream (check AudioContext state & track.muted above).",
-          );
-          return;
-        }
-        const localPath = audioFilePathRef.current;
-        if (
-          !localPath ||
-          typeof window === "undefined" ||
-          !window.electronAPI?.audioFileAppend
-        ) {
-          console.warn(
-            "[Recorder] Cannot persist chunk — missing path or IPC.",
-            { localPath, hasAppendIPC: !!window.electronAPI?.audioFileAppend },
-          );
-          return;
-        }
-
-        const blob = e.data;
-        audioWriteChainRef.current = audioWriteChainRef.current
-          .then(async () => {
-            const arrayBuffer = await blob.arrayBuffer();
-            console.log(
-              `[Recorder] appending ${arrayBuffer.byteLength} bytes → ${localPath}`,
-            );
-            await window.electronAPI?.audioFileAppend(localPath, arrayBuffer);
-          })
-          .catch((error) => {
-            console.warn("[Recorder] Audio append failed:", error);
-          });
       };
       mediaRecorderRef.current = recorder;
       recorder.start(1000);
@@ -517,22 +473,48 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
       }
     });
 
-    // Flush all queued appends (the final chunk is now guaranteed enqueued).
-    await audioWriteChainRef.current;
-    const audioFilePath = audioFilePathRef.current;
-    console.log("[Recorder] finishing — audio file path:", audioFilePath);
+    // Combine all buffered chunks into ONE complete WebM and write it once.
+    // A single finalized blob is guaranteed to have a valid header + duration.
+    let audioFilePath: string | null = null;
+    const recordedChunks = recordedChunksRef.current;
+    const recordedBlob =
+      recordedChunks.length > 0
+        ? new Blob(recordedChunks, {
+            type: mediaRecorderRef.current?.mimeType || "audio/webm",
+          })
+        : null;
+    console.log(
+      `[Recorder] finishing — buffered chunks: ${recordedChunks.length}, blob size: ${
+        recordedBlob?.size ?? 0
+      } bytes`,
+    );
 
     // Playback URL is produced by the remux step below (media:// scheme).
-    // We no longer hand the raw .webm (file://) to the player.
     let playbackUrl: string | null = null;
 
-    if (audioFilePath && typeof window !== "undefined" && window.electronAPI?.audioFileClose) {
+    if (
+      recordedBlob &&
+      recordedBlob.size > 0 &&
+      typeof window !== "undefined" &&
+      window.electronAPI?.audioFileCreate
+    ) {
       try {
-        const closed = await window.electronAPI.audioFileClose(audioFilePath);
-        console.log("[Recorder] audioFileClose result:", closed);
+        audioFilePath = await window.electronAPI.audioFileCreate();
+        const arrayBuffer = await recordedBlob.arrayBuffer();
+        await window.electronAPI.audioFileAppend(audioFilePath, arrayBuffer);
+        await window.electronAPI.audioFileClose(audioFilePath);
+        audioFilePathRef.current = audioFilePath;
+        console.log(
+          `[Recorder] wrote complete recording (${arrayBuffer.byteLength} bytes) → ${audioFilePath}`,
+        );
       } catch (error) {
-        console.warn("[Recorder] Failed to close local audio file:", error);
+        console.warn("[Recorder] Failed to write recording file:", error);
+        audioFilePath = null;
       }
+    } else {
+      console.warn(
+        "[Recorder] No audio captured — nothing to save or diarize.",
+      );
     }
 
     // Finalize the streaming .webm into a seekable .ogg with valid duration
@@ -653,7 +635,7 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
     cleanupStreams();
     isPausedRef.current = false;
     recognizerDeadRef.current = false;
-    audioWriteChainRef.current = Promise.resolve();
+    recordedChunksRef.current = [];
   }, [cleanupStreams]);
 
   return {

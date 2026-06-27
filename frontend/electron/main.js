@@ -487,7 +487,12 @@ ipcMain.handle("remux-audio", async(_event, filePath) => {
     };
 });
 
-const SEGMENT_SECONDS = 9000;
+// ~23.3 min per chunk — just under the gpt-4o-transcribe-diarize hard limit
+// of 1500s (25 min). Kept close to the limit to minimize the number of chunks
+// (fewer boundaries => less cross-chunk speaker-label drift). Longer
+// recordings/uploads are split into multiple chunks, each diarized separately
+// and stitched back together (offset by chunk index).
+const SEGMENT_SECONDS = 1400;
 
 ipcMain.handle("audio-compress-and-read", async(_event, filePath) => {
     if (!filePath || !fs.existsSync(filePath)) {
@@ -501,20 +506,33 @@ ipcMain.handle("audio-compress-and-read", async(_event, filePath) => {
     const base = path.basename(filePath).replace(/\.[^.]+$/, "");
     const outPattern = path.join(dir, `${base}-chunk-%03d.ogg`);
 
-    // The streaming WebM from MediaRecorder often has missing/loose headers
-    // (FFmpeg reports "detected only with low score of 1"). These INPUT options
-    // (all before -i) force WebM demuxing, ignore header corruption, regenerate
-    // presentation timestamps, and drop corrupt packets instead of aborting.
-    await runFfmpeg([
-        "-y",
-        "-fflags", "+genpts+discardcorrupt",
-        "-err_detect", "ignore_err",
-        "-f", "webm",
-        "-i", filePath,
-        "-vn", "-ar", "16000", "-ac", "1", "-c:a", "libopus", "-b:a", "24k",
-        "-f", "segment", "-segment_time", String(SEGMENT_SECONDS),
-        outPattern,
-    ]);
+    // Recordings from MediaRecorder are .webm with loose/streaming headers, so we
+    // force the WebM demuxer + permissive flags to recover them. UPLOADS can be
+    // ANY format (mp4/mp3/wav/m4a...), so we must NOT force webm there — that
+    // would make FFmpeg try to parse e.g. an MP4 as WebM and fail with
+    // "EBML header parsing failed". For non-webm inputs we let FFmpeg auto-detect.
+    const isWebm = filePath.toLowerCase().endsWith(".webm");
+    try {
+        await runFfmpeg([
+            "-y",
+            "-fflags", "+genpts+discardcorrupt",
+            "-err_detect", "ignore_err",
+            ...(isWebm ? ["-f", "webm"] : []),
+            "-i", filePath,
+            "-vn", "-ar", "16000", "-ac", "1", "-c:a", "libopus", "-b:a", "24k",
+            "-f", "segment", "-segment_time", String(SEGMENT_SECONDS),
+            outPattern,
+        ]);
+    } catch (err) {
+        const msg = String(err && err.message ? err.message : err);
+        // Video-only / silent file => FFmpeg drops video (-vn) and finds no audio.
+        if (/does not contain any stream|Output file is empty/i.test(msg)) {
+            throw new Error(
+                "This file has no audio track to transcribe. Please upload a file that contains audio.",
+            );
+        }
+        throw err;
+    }
 
     const produced = (await fs.promises.readdir(dir))
         .filter((f) => f.startsWith(`${base}-chunk-`) && f.endsWith(".ogg"))

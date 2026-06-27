@@ -72,7 +72,7 @@ export default function CaptureControls({
   const isActive = isRecording && !isPaused;
 
   return (
-    <div className="flex h-full min-h-0 w-full flex-col gap-2">
+    <div className="flex min-h-full w-full flex-col gap-2">
       <div className={`${cardClass} px-5 py-4`}>
         <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
           System Status
@@ -113,36 +113,49 @@ export default function CaptureControls({
       </div>
 
       <div
-        className={`${cardClass} flex flex-1 flex-col items-center justify-between gap-6 p-6`}
+        className={`${cardClass} flex min-h-0 flex-1 flex-col items-center gap-3 p-4 lg:gap-6 lg:p-6`}
       >
         {activeTab === "live" ? (
           <>
-            <div className="flex w-full flex-col items-center gap-4">
-              <div className="relative my-2 h-80 w-80 shrink-0">
-                <SiriWave isRecording={isRecording} isPaused={isPaused} />
-                <div className="pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-center">
-                  <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
-                    Session Time
-                  </span>
-                  <span className="font-mono text-2xl font-black tracking-tight text-slate-800 tabular-nums">
-                    {formatTime(sessionTime)}
-                  </span>
+            {/* HEIGHT-driven layout:
+                  tall windows  -> vertical stack (circle on top, controls below)
+                  short windows (<=700px height) -> 50/50 split (circle left, controls right)
+                  so vertical space is only "split" when it's actually scarce. */}
+            <div className="flex w-full min-h-0 flex-1 flex-col items-center justify-center gap-4 [@media(max-height:700px)]:flex-row [@media(max-height:700px)]:justify-between">
+              {/* Circle group: top when stacked, left 50% when split. */}
+              <div className="flex min-w-0 flex-col items-center justify-center [@media(max-height:700px)]:flex-1">
+                <div className="session-circle relative h-40 w-40 shrink-0 bg-transparent shadow-none">
+                  <SiriWave isRecording={isRecording} isPaused={isPaused} />
+                  <div className="absolute inset-0 z-10 flex flex-col items-center justify-center px-2">
+                    <span className="session-time-label max-w-full truncate text-xs font-semibold uppercase tracking-wider text-slate-400">
+                      Session Time
+                    </span>
+                    <span className="session-time-value font-mono text-base font-bold tracking-tight text-slate-800 tabular-nums">
+                      {formatTime(sessionTime)}
+                    </span>
+                  </div>
                 </div>
               </div>
 
-              {/* FIXED DYNAMIC UI BLOCK FOR MIC & LANGUAGE */}
-              <div className="flex w-full max-w-[280px] flex-col items-center gap-2">
-                {/* Mic Indicator */}
-                <div className="flex w-full items-center justify-center gap-1.5 rounded-full border border-white/60 bg-white/50 px-4 py-2 text-xs font-semibold text-slate-600 shadow-sm backdrop-blur-md">
+              {/* Controls: below the circle when stacked, right 50% when split.
+                  Always each on its own line. */}
+              <div className="session-controls flex min-w-0 flex-col items-center justify-center gap-2 [@media(max-height:700px)]:flex-1">
+                {/* Microphone — always its own line. */}
+                <div className="flex max-w-full items-center gap-1.5 rounded-full border border-white/60 bg-white/50 px-3 py-1.5 text-xs font-semibold text-slate-600 shadow-sm backdrop-blur-md md:text-sm">
                   <Mic className="h-3.5 w-3.5 shrink-0 text-violet-500" />
-                  <span className="truncate" title={micLabel}>
+                  <span
+                    className="max-w-[200px] truncate sm:max-w-[240px]"
+                    title={micLabel}
+                  >
                     {micLabel}
                   </span>
                 </div>
 
-                {/* Language & Quality Indicators */}
-                <div className="flex w-full items-center justify-between gap-2">
-                  <div className="flex flex-1 items-center justify-center gap-1.5 overflow-hidden rounded-full border border-white/60 bg-white/50 px-3 py-2 text-xs font-semibold text-slate-600 shadow-sm backdrop-blur-md">
+                {/* Language + Quality: stacked (line-by-line) normally; side-by-side
+                    only on a full wide+tall desktop (.session-langquality media). */}
+                <div className="session-langquality flex flex-col items-center gap-2">
+                  {/* Language */}
+                  <div className="flex max-w-full items-center gap-1.5 rounded-full border border-white/60 bg-white/50 px-3 py-1.5 text-xs font-semibold text-slate-600 shadow-sm backdrop-blur-md md:text-sm">
                     <Globe className="h-3.5 w-3.5 shrink-0 text-blue-500" />
                     <span
                       className="truncate"
@@ -158,9 +171,10 @@ export default function CaptureControls({
                     </span>
                   </div>
 
-                  <div className="flex shrink-0 items-center justify-center gap-1.5 rounded-full border border-white/60 bg-white/50 px-3 py-2 text-xs font-semibold text-slate-600 shadow-sm backdrop-blur-md">
+                  {/* Audio quality */}
+                  <div className="flex max-w-full items-center gap-1.5 rounded-full border border-white/60 bg-white/50 px-3 py-1.5 text-xs font-semibold text-slate-600 shadow-sm backdrop-blur-md md:text-sm">
                     <Activity
-                      className={`h-3.5 w-3.5 ${
+                      className={`h-3.5 w-3.5 shrink-0 ${
                         audioQuality === "Good"
                           ? "text-emerald-500"
                           : audioQuality === "Medium"
@@ -168,14 +182,14 @@ export default function CaptureControls({
                             : "text-rose-500"
                       }`}
                     />
-                    <span>{audioQuality}</span>
+                    <span className="truncate">{audioQuality}</span>
                   </div>
                 </div>
               </div>
-              {/* END OF FIXED UI BLOCK */}
             </div>
 
-            <div className="flex w-full flex-col items-center gap-4">
+            {/* Controls pinned to the bottom of the column — never overlapped. */}
+            <div className="mt-auto flex w-full shrink-0 flex-col items-center gap-2 lg:gap-4">
               <div className="flex h-5 items-center justify-center">
                 {isActive ? (
                   <div className="flex items-end gap-1">
@@ -294,7 +308,7 @@ export default function CaptureControls({
             <button
               onClick={onProcessUpload}
               disabled={!uploadFile || isUploading}
-              className="flex w-full items-center justify-center gap-2 rounded-xl bg-linear-to-r from-violet-500 to-blue-500 py-4 text-sm font-bold text-white shadow-lg shadow-violet-500/25 transition-all hover:from-violet-600 hover:to-blue-600 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50"
+              className="flex w-full shrink-0 items-center justify-center gap-2 rounded-xl bg-linear-to-r from-violet-500 to-blue-500 py-4 text-sm font-bold text-white shadow-lg shadow-violet-500/25 transition-all hover:from-violet-600 hover:to-blue-600 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50"
             >
               {isUploading ? "Processing..." : "Process File"}
             </button>

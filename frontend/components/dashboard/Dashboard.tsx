@@ -1,10 +1,11 @@
 "use client";
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { Plus, Pencil, Check, Upload } from "lucide-react";
+import { Plus, Pencil, Check, Upload, Menu, FileText } from "lucide-react";
 import { useGlobalRecording } from "@/components/GlobalRecordingProvider";
 import MyMeetings from "@/components/MyMeetings";
 import Sidebar, { type DashboardView } from "./Sidebar";
+import MobileSidebar from "./MobileSidebar";
 import CaptureControls from "./CaptureControls";
 import TranscriptArea from "./TranscriptArea";
 import {
@@ -63,6 +64,7 @@ export default function Dashboard() {
   const router = useRouter();
 
   const [view, setView] = useState<DashboardView>("dashboard");
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [sessionTime, setSessionTime] = useState(0);
@@ -610,8 +612,10 @@ export default function Dashboard() {
   }, []);
 
   return (
-    <div className="flex h-screen w-full overflow-hidden bg-slate-50 text-slate-800">
+    <div className="flex h-dvh w-full overflow-hidden bg-slate-50 text-slate-800">
+      {/* Desktop rail (≥1024px). Hidden on smaller screens — main expands to full width. */}
       <Sidebar
+        className="hidden w-64 lg:flex"
         activeView={view}
         onNavigate={setView}
         meetingsCount={meetingsCount}
@@ -620,12 +624,41 @@ export default function Dashboard() {
         onDeleteAccount={() => setShowDeleteModal(true)}
       />
 
-      <main className="relative flex flex-1 flex-col overflow-hidden">
+      {/* Mobile drawer (<1024px), toggled by the hamburger. */}
+      <MobileSidebar
+        open={sidebarOpen}
+        onClose={() => setSidebarOpen(false)}
+        activeView={view}
+        onNavigate={setView}
+        meetingsCount={meetingsCount}
+        userName={userName}
+        onLogout={() => setShowLogoutModal(true)}
+        onDeleteAccount={() => setShowDeleteModal(true)}
+      />
+
+      <main className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
         <AmbientGlow />
 
+        {/* Mobile top bar with hamburger — fixed height, hidden on desktop. */}
+        <header className="relative z-20 flex shrink-0 items-center gap-3 border-b border-white/60 bg-white/50 px-4 py-3 backdrop-blur-xl lg:hidden">
+          <button
+            onClick={() => setSidebarOpen(true)}
+            aria-label="Open menu"
+            className="flex h-9 w-9 items-center justify-center rounded-xl text-slate-600 transition-colors hover:bg-white/70 hover:text-slate-900"
+          >
+            <Menu className="h-5 w-5" />
+          </button>
+          <span className="flex items-center gap-2 text-base font-bold tracking-tight text-slate-900">
+            <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-linear-to-br from-violet-500 to-blue-500 shadow-sm shadow-violet-500/30">
+              <FileText className="h-4 w-4 text-white" strokeWidth={2.2} />
+            </span>
+            ThreadNotes
+          </span>
+        </header>
+
         {view === "dashboard" ? (
-          <div className="relative z-10 flex h-full min-h-0 flex-col gap-4 px-3 py-4">
-            <div className="mt-4 flex shrink-0 flex-wrap items-end justify-between gap-4">
+          <div className="relative z-10 flex min-h-0 flex-1 flex-col gap-3 px-3 py-3 lg:gap-4 lg:py-4">
+            <div className="flex shrink-0 flex-wrap items-end justify-between gap-4 lg:mt-4">
               <div>
                 <h2 className="text-2xl font-bold tracking-tight text-slate-900">
                   Capture &amp; Analysis
@@ -644,8 +677,12 @@ export default function Dashboard() {
               </button>
             </div>
 
-            <div className="flex min-h-0 flex-1 flex-col gap-3 lg:flex-row lg:items-stretch lg:gap-3">
-              <div className="flex w-full shrink-0 flex-col lg:w-105">
+            {/* Strict 50/50 split — ALWAYS side-by-side, never stacks. */}
+            <div className="flex min-h-0 w-full flex-1 flex-row gap-4">
+              {/* Yellow zone (Recording) — 50% width, full height. overflow-x-hidden
+                  kills any horizontal scrollbar; overflow-y-auto keeps a vertical
+                  scroll as a safety on very short windows. */}
+              <div className="flex h-full w-1/2 min-h-0 min-w-0 flex-col overflow-x-hidden overflow-y-auto">
                 <CaptureControls
                   isRecording={isRecording}
                   isPaused={isPaused}
@@ -667,7 +704,8 @@ export default function Dashboard() {
                   audioQuality={audioQuality}
                 />
               </div>
-              <div className="flex min-h-0 flex-1 flex-col">
+              {/* Blue zone (Transcript) — 50% width, full height; scrolls independently. */}
+              <div className="flex h-full w-1/2 min-h-0 min-w-0 flex-col">
                 {isDiarizing ? (
                   <div className="flex min-h-[320px] flex-col items-center justify-center rounded-3xl border border-dashed border-slate-300 bg-white/90 p-10 text-center shadow-sm shadow-slate-200/60">
                     <div className="mb-4 inline-flex h-14 w-14 items-center justify-center rounded-full bg-violet-50 text-violet-600 shadow-inner shadow-violet-100">

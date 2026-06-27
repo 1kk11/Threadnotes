@@ -595,18 +595,6 @@ async def get_azure_speech_token(user: dict = Depends(get_current_user)):
     return {"token": response.text, "region": AZURE_SPEECH_REGION}
 
 
-DIARIZATION_PROMPT = (
-    "Be highly conservative with speaker identification. "
-    "DO NOT create new speakers for background noise, breaths, coughs, "
-    "laughter, music, or slight vocal variations (pitch, volume, or tone changes). "
-    "Only introduce a new speaker when you hear a clearly distinct human voice. "
-    "If there are clearly only 2 distinct voices, strictly output only "
-    "'Speaker 1' and 'Speaker 2' and never invent a third speaker. "
-    "Prefer assigning ambiguous or noisy segments to the nearest existing speaker "
-    "rather than creating an additional one."
-)
-
-
 _NOISE_ANNOTATION = re.compile(
     r"^[\(\[\*]?\s*(breath|breathing|inhale|exhale|cough|sneeze|click|"
     r"clicks|noise|static|silence|music|laughter|laughs?|sigh)\s*[\)\]\*]?$",
@@ -631,13 +619,14 @@ def _is_noise_fragment(text: str) -> bool:
 
 
 def _create_diarized_transcription(client, deployment, safe_name, audio_bytes, mime):
-    """Call the diarization model, attempting to pass the steering prompt.
+    """Call the diarization model.
 
-    Some gpt-4o-transcribe-diarize deployments reject the `prompt` parameter
-    with invalid_request_error. We try WITH the prompt (so the model is told to
-    focus on primary speakers and ignore background noise / transient crosstalk)
-    and transparently retry WITHOUT it if the deployment doesn't accept it — so
-    we never hard-fail just because the prompt field is unsupported.
+    NOTE: the gpt-4o-transcribe-diarize deployment REJECTS the `prompt`
+    parameter (400 invalid_request_error), so we never send it — doing so only
+    wasted a guaranteed-failed round-trip + an SDK retry on every single chunk.
+    Speaker over-segmentation is instead handled downstream by the ghost-speaker
+    filter (_merge_ghost_speakers / _identify_ghost_speakers), so dropping the
+    prompt does NOT change the diarization output — it just removes the waste.
     """
     base = dict(
         model=deployment,
@@ -646,22 +635,18 @@ def _create_diarized_transcription(client, deployment, safe_name, audio_bytes, m
         extra_body={"chunking_strategy": "auto"},
     )
     try:
-        return client.audio.transcriptions.create(prompt=DIARIZATION_PROMPT, **base)
+        return client.audio.transcriptions.create(**base)
     except Exception as exc:
-        msg = str(exc).lower()
-        prompt_rejected = any(
-            k in msg
-            for k in (
-                "prompt",
-                "unrecognized",
-                "unsupported",
-                "unexpected",
-                "invalid_request",
-                "400",
-            )
+        # Surface the ACTUAL Azure error body (status + payload), not just the
+        # opaque httpx status line, so any real 400 reason is visible in logs.
+        body = getattr(getattr(exc, "response", None), "text", None)
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        print(
+            f"CRITICAL DIARIZE ERROR (status={status}): {exc}\n"
+            f"Azure response body: {body}",
+            flush=True,
         )
-        if prompt_rejected:
-            return client.audio.transcriptions.create(**base)
+        traceback.print_exc()
         raise
 
 
