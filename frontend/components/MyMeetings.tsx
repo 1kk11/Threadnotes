@@ -65,7 +65,6 @@ export default function MyMeetings() {
     }
   };
 
-  // FIX: New Export Logic for downloading .txt file
   const handleExport = (meeting: Meeting) => {
     const formattedDate = new Date(meeting.date).toLocaleString();
     const body = meeting.transcript
@@ -147,8 +146,6 @@ export default function MyMeetings() {
     setMeetingToDelete(null);
   };
 
-  // Shared calendar UI — rendered in the desktop side panel AND the mobile drawer
-  // so both have identical functionality.
   const calendarPanel = (
     <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-6">
       <div className="flex justify-between items-center mb-6">
@@ -168,7 +165,7 @@ export default function MyMeetings() {
           const d = date as Date;
           const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
           setSelectedDate(dateStr);
-          setIsCalendarOpen(false); // close the mobile drawer after picking (no-op on desktop)
+          setIsCalendarOpen(false);
         }}
         value={selectedDate ? new Date(selectedDate) : null}
         tileContent={({ date, view }) => {
@@ -242,7 +239,6 @@ export default function MyMeetings() {
                   className="w-full pl-11 pr-4 py-3 text-sm bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 text-slate-900 transition-all font-medium placeholder:text-slate-400 shadow-sm"
                 />
                 </div>
-                {/* Calendar toggle — mobile/tablet only; opens the calendar drawer. */}
                 <button
                   onClick={() => setIsCalendarOpen(true)}
                   aria-label="Open calendar filter"
@@ -325,14 +321,12 @@ export default function MyMeetings() {
             </div>
           </div>
 
-          {/* Desktop calendar panel — hidden below lg (replaced by the icon toggle). */}
           <div className="hidden lg:block w-full lg:w-[350px] shrink-0 sticky top-0">
             {calendarPanel}
           </div>
         </div>
       </div>
 
-      {/* Mobile calendar drawer/overlay (lg:hidden) */}
       {isCalendarOpen && (
         <div
           className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-sm lg:hidden animate-in fade-in duration-200"
@@ -410,7 +404,6 @@ export default function MyMeetings() {
                 {selectedMeeting.topic}
               </h2>
               <div className="flex items-center gap-1">
-                {/* FIX: Calling handleExport and showing Download Icon */}
                 <button
                   onClick={() => handleExport(selectedMeeting)}
                   className="p-2 text-white/80 hover:bg-white/20 hover:text-white rounded-full transition-colors"

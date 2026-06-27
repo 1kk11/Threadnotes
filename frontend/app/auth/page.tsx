@@ -175,7 +175,7 @@ export default function AuthPage() {
   };
 
   return (
-    <div className="flex h-[100dvh] overflow-y-auto bg-slate-50 lg:bg-white">
+    <div className="flex h-full overflow-y-auto bg-slate-50 lg:bg-white">
       <div className="hidden lg:flex w-1/2 bg-gradient-to-br from-indigo-600 to-indigo-800 items-center justify-center p-12 text-white relative overflow-hidden">
         <div className="absolute top-[-10%] left-[-10%] w-96 h-96 bg-indigo-500 rounded-full mix-blend-multiply filter blur-3xl opacity-50 animate-pulse"></div>
         <div

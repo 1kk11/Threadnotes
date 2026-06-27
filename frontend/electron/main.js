@@ -31,11 +31,6 @@ function createRecordingFilePath() {
     return path.join(recordingsDir, fileName);
 }
 
-// Resolve a usable FFmpeg binary. Order of preference:
-//   1. ffmpeg-static (known-good binary; in a packaged asar it must be read
-//      from the unpacked dir — configured via "asarUnpack" in package.json).
-//   2. The binary shipped through electron-builder extraResources (fallback).
-//   3. Whatever "ffmpeg" is on PATH (last resort, e.g. dev machines).
 let _ffmpegPathCache = null;
 
 function getFfmpegPath() {
@@ -48,8 +43,6 @@ function getFfmpegPath() {
         console.warn("[ffmpeg] ffmpeg-static not resolvable:", e.message);
     }
     if (staticPath) {
-        // Inside a packaged app the require() path points into app.asar, which
-        // is not executable; the real file lives in app.asar.unpacked.
         const unpacked = staticPath.replace("app.asar", "app.asar.unpacked");
         if (fs.existsSync(unpacked)) {
             _ffmpegPathCache = unpacked;
@@ -74,8 +67,6 @@ function getFfmpegPath() {
     return _ffmpegPathCache;
 }
 
-// Run FFmpeg with the given args. Captures stderr and surfaces it on failure
-// so a non-zero/crash exit code is actionable instead of opaque.
 function runFfmpeg(args) {
     const ffmpegPath = getFfmpegPath();
     return new Promise((resolve, reject) => {
@@ -123,8 +114,6 @@ const OUT_DIR = path.join(__dirname, "..", "out");
 const APP_SCHEME = "app";
 const APP_ORIGIN = `${APP_SCHEME}://local/`;
 
-// Privileged scheme for serving locally-recorded/remuxed audio to the
-// sandboxed renderer. `stream: true` enables Range requests (seeking).
 const MEDIA_SCHEME = "media";
 const MEDIA_HOST = "recordings";
 
@@ -206,13 +195,9 @@ const AUDIO_MIME_TYPES = {
     ".wav": "audio/wav",
 };
 
-// Serves files from the recordings directory over media://recordings/<file>,
-// honoring Range requests so the <audio> element can seek.
 async function handleMediaProtocol(request) {
     const recordingsDir = getRecordingsDirectory();
     const url = new URL(request.url);
-    // Only ever serve a bare basename out of the recordings dir — defeats
-    // any "../" traversal attempt encoded in the path.
     const fileName = path.basename(decodeURIComponent(url.pathname));
     const filePath = path.normalize(path.join(recordingsDir, fileName));
 
@@ -296,7 +281,10 @@ function createWindow() {
 
     Menu.setApplicationMenu(null);
 
-    win.once("ready-to-show", () => win.show());
+    win.once("ready-to-show", () => {
+        win.maximize();
+        win.show();
+    });
 
     if (isDev) {
         win.loadURL(DEV_URL);
@@ -356,8 +344,6 @@ function getLocalTranscriptsDirectory() {
     return dir;
 }
 
-// Persist the diarized transcript to the user's local PC. The Cloud Vault is a
-// stateless proxy and never stores transcripts — this is the only place they live.
 ipcMain.handle("save-transcript-local", async(_event, payload = {}) => {
     const dir = getLocalTranscriptsDirectory();
 
@@ -422,10 +408,6 @@ ipcMain.handle("audio-file-close", async(_event, filePath) => {
     }
 
     return new Promise((resolve) => {
-        // Resolve on "close" (the OS file descriptor is actually released),
-        // NOT just on "finish" (data flushed). On Windows an open write handle
-        // locks the file, so a too-early resolve lets FFmpeg spawn against a
-        // locked file → "Invalid data found when processing input".
         const finalize = () => {
             audioWriteStreams.delete(filePath);
             let sizeOnDisk = 0;
@@ -451,10 +433,6 @@ ipcMain.handle("audio-file-close", async(_event, filePath) => {
     });
 });
 
-// Remux the raw streaming .webm (which has no duration in its header) into a
-// clean .ogg/opus file. Re-encoding — rather than a stream copy — guarantees a
-// valid header and granule positions, so the <audio> element reports a real
-// duration and can seek. Returns a media:// URL the sandboxed renderer can load.
 ipcMain.handle("remux-audio", async(_event, filePath) => {
     if (!filePath || !fs.existsSync(filePath)) {
         throw new Error(`Recording file not found for remux: ${filePath}`);
@@ -463,8 +441,6 @@ ipcMain.handle("remux-audio", async(_event, filePath) => {
     const base = path.basename(filePath).replace(/\.[^.]+$/, "");
     const outputPath = path.join(dir, `${base}-final.ogg`);
 
-    // Same permissive input handling as the compress step — the source is the
-    // same header-light streaming WebM.
     await runFfmpeg([
         "-y",
         "-fflags", "+genpts+discardcorrupt",
@@ -487,11 +463,6 @@ ipcMain.handle("remux-audio", async(_event, filePath) => {
     };
 });
 
-// ~23.3 min per chunk — just under the gpt-4o-transcribe-diarize hard limit
-// of 1500s (25 min). Kept close to the limit to minimize the number of chunks
-// (fewer boundaries => less cross-chunk speaker-label drift). Longer
-// recordings/uploads are split into multiple chunks, each diarized separately
-// and stitched back together (offset by chunk index).
 const SEGMENT_SECONDS = 1400;
 
 ipcMain.handle("audio-compress-and-read", async(_event, filePath) => {
@@ -506,11 +477,6 @@ ipcMain.handle("audio-compress-and-read", async(_event, filePath) => {
     const base = path.basename(filePath).replace(/\.[^.]+$/, "");
     const outPattern = path.join(dir, `${base}-chunk-%03d.ogg`);
 
-    // Recordings from MediaRecorder are .webm with loose/streaming headers, so we
-    // force the WebM demuxer + permissive flags to recover them. UPLOADS can be
-    // ANY format (mp4/mp3/wav/m4a...), so we must NOT force webm there — that
-    // would make FFmpeg try to parse e.g. an MP4 as WebM and fail with
-    // "EBML header parsing failed". For non-webm inputs we let FFmpeg auto-detect.
     const isWebm = filePath.toLowerCase().endsWith(".webm");
     try {
         await runFfmpeg([
@@ -525,7 +491,6 @@ ipcMain.handle("audio-compress-and-read", async(_event, filePath) => {
         ]);
     } catch (err) {
         const msg = String(err && err.message ? err.message : err);
-        // Video-only / silent file => FFmpeg drops video (-vn) and finds no audio.
         if (/does not contain any stream|Output file is empty/i.test(msg)) {
             throw new Error(
                 "This file has no audio track to transcribe. Please upload a file that contains audio.",
@@ -542,7 +507,6 @@ ipcMain.handle("audio-compress-and-read", async(_event, filePath) => {
     for (const f of produced) {
         const full = path.join(dir, f);
         const data = await fs.promises.readFile(full);
-        // Skip zero-byte segments so we never hand the diarizer an invalid blob.
         if (data.byteLength > 0) {
             chunks.push({
                 buffer: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength),

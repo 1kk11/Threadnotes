@@ -8,7 +8,6 @@ import React, {
   useEffect,
 } from "react";
 
-// Context ki types define kar rahe hain
 interface AudioContextType {
   isPlaying: boolean;
   currentTime: number;
@@ -30,7 +29,6 @@ export function GlobalAudioProvider({
 }: {
   children: React.ReactNode;
 }) {
-  // Yeh ref humesha audio zinda rakhega, chahe page change ho jaye
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const [isPlaying, setIsPlaying] = useState(false);
@@ -39,7 +37,6 @@ export function GlobalAudioProvider({
   const [currentAudioUrl, setCurrentAudioUrl] = useState<string | null>(null);
 
   useEffect(() => {
-    // Sirf client side par audio object banayenge (Next.js SSR error se bachne ke liye)
     audioRef.current = new Audio();
 
     const handleTimeUpdate = () =>
@@ -57,7 +54,6 @@ export function GlobalAudioProvider({
     audio.addEventListener("play", handlePlay);
     audio.addEventListener("pause", handlePause);
 
-    // Cleanup function
     return () => {
       audio.removeEventListener("timeupdate", handleTimeUpdate);
       audio.removeEventListener("loadedmetadata", handleLoadedMetadata);
@@ -72,7 +68,6 @@ export function GlobalAudioProvider({
   const playAudio = (url: string) => {
     if (!audioRef.current) return;
 
-    // Agar naya audio hai, toh URL update karo
     if (currentAudioUrl !== url) {
       audioRef.current.src = url;
       setCurrentAudioUrl(url);
@@ -127,7 +122,6 @@ export function GlobalAudioProvider({
   );
 }
 
-// Custom hook isko baaki components mein easily use karne ke liye
 export const useGlobalAudio = () => {
   const context = useContext(GlobalAudioContext);
   if (context === undefined) {

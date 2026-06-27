@@ -1,15 +1,11 @@
-// One-off generator for a placeholder app icon (build/icon.ico).
-// Produces a 256x256 ICO (PNG-encoded) with the ThreadNotes indigo brand color
-// and a simple white mark. Replace build/icon.ico with real artwork anytime.
 const fs = require("fs");
 const path = require("path");
 const zlib = require("zlib");
 
 const SIZE = 256;
-const INDIGO = [79, 70, 229]; // #4F46E5 (indigo-600)
+const INDIGO = [79, 70, 229];
 const WHITE = [255, 255, 255];
 
-// --- build raw RGBA pixel buffer ---
 const px = Buffer.alloc(SIZE * SIZE * 4);
 const cx = SIZE / 2;
 const cy = SIZE / 2;
@@ -17,7 +13,6 @@ for (let y = 0; y < SIZE; y++) {
   for (let x = 0; x < SIZE; x++) {
     const i = (y * SIZE + x) * 4;
     let c = INDIGO;
-    // White rounded "note" rectangle in the center as a simple brand mark.
     const inRect = x > 78 && x < 178 && y > 64 && y < 192;
     const inLines =
       inRect &&
@@ -25,7 +20,7 @@ for (let y = 0; y < SIZE; y++) {
       x > 96 &&
       x < 160;
     if (inRect) c = WHITE;
-    if (inLines) c = INDIGO; // carve "text lines" back into indigo
+    if (inLines) c = INDIGO;
     px[i] = c[0];
     px[i + 1] = c[1];
     px[i + 2] = c[2];
@@ -33,7 +28,6 @@ for (let y = 0; y < SIZE; y++) {
   }
 }
 
-// --- encode PNG ---
 function crc32(buf) {
   let c = ~0;
   for (let i = 0; i < buf.length; i++) {
@@ -54,9 +48,8 @@ const sig = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
 const ihdr = Buffer.alloc(13);
 ihdr.writeUInt32BE(SIZE, 0);
 ihdr.writeUInt32BE(SIZE, 4);
-ihdr[8] = 8; // bit depth
-ihdr[9] = 6; // color type RGBA
-// add filter byte (0) per scanline
+ihdr[8] = 8;
+ihdr[9] = 6;
 const raw = Buffer.alloc((SIZE * 4 + 1) * SIZE);
 for (let y = 0; y < SIZE; y++) {
   raw[y * (SIZE * 4 + 1)] = 0;
@@ -69,20 +62,19 @@ const png = Buffer.concat([
   chunk("IEND", Buffer.alloc(0)),
 ]);
 
-// --- wrap PNG in ICO container ---
 const icoHeader = Buffer.alloc(6);
-icoHeader.writeUInt16LE(0, 0); // reserved
-icoHeader.writeUInt16LE(1, 2); // type: icon
-icoHeader.writeUInt16LE(1, 4); // count
+icoHeader.writeUInt16LE(0, 0);
+icoHeader.writeUInt16LE(1, 2);
+icoHeader.writeUInt16LE(1, 4);
 const entry = Buffer.alloc(16);
-entry[0] = 0; // width 256 -> 0
-entry[1] = 0; // height 256 -> 0
-entry[2] = 0; // palette
-entry[3] = 0; // reserved
-entry.writeUInt16LE(1, 4); // planes
-entry.writeUInt16LE(32, 6); // bpp
-entry.writeUInt32LE(png.length, 8); // size
-entry.writeUInt32LE(22, 12); // offset (6 + 16)
+entry[0] = 0;
+entry[1] = 0;
+entry[2] = 0;
+entry[3] = 0;
+entry.writeUInt16LE(1, 4);
+entry.writeUInt16LE(32, 6);
+entry.writeUInt32LE(png.length, 8);
+entry.writeUInt32LE(22, 12);
 const ico = Buffer.concat([icoHeader, entry, png]);
 
 const outDir = path.join(__dirname, "..", "build");

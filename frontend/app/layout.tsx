@@ -2,7 +2,6 @@ import type { Metadata, Viewport } from "next";
 import { Sora } from "next/font/google";
 import "./globals.css";
 import AuthInterceptor from "@/components/AuthInterceptor";
-// Global state wrappers
 import { GlobalAudioProvider } from "@/components/GlobalAudioProvider";
 import { GlobalRecordingProvider } from "@/components/GlobalRecordingProvider";
 
@@ -33,14 +32,14 @@ export default function RootLayout({
   return (
     <html lang="en" className={sora.variable}>
       <body className="m-0 overflow-hidden bg-[var(--bg-primary)] p-0 font-sans antialiased text-[var(--text-primary)]">
-        {/* Global providers wrap kiye hain taaki recording aur audio persist kare[cite: 10] */}
         <GlobalAudioProvider>
           <GlobalRecordingProvider>
-            {/* Fixed viewport shell: exactly one screen tall/wide, clipped.
-                Every page mounts inside this and manages its own inner scroll. */}
-            <div className="h-[100dvh] w-screen overflow-hidden">
-              <AuthInterceptor />
-              {children}
+            <div className="flex h-dvh w-screen flex-col overflow-hidden">
+              <div className="app-drag h-10 shrink-0 select-none bg-[#EBF2FA]" />
+              <div className="relative min-h-0 w-full flex-1 overflow-hidden">
+                <AuthInterceptor />
+                {children}
+              </div>
             </div>
           </GlobalRecordingProvider>
         </GlobalAudioProvider>

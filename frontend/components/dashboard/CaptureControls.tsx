@@ -27,6 +27,8 @@ type CaptureControlsProps = {
   sessionTime: number;
   activeTab: CaptureTab;
   systemStatus: string;
+  isDiarizing?: boolean;
+  diarizeProgress?: number;
   onStart: () => void;
   onPause: () => void;
   onResume: () => void;
@@ -53,6 +55,8 @@ export default function CaptureControls({
   sessionTime,
   activeTab,
   systemStatus,
+  isDiarizing = false,
+  diarizeProgress = 0,
   onStart,
   onPause,
   onResume,
@@ -79,11 +83,32 @@ export default function CaptureControls({
         </p>
         <p
           className={`mt-1 text-lg font-bold ${
-            isActive ? "text-violet-600" : "text-slate-800"
+            isActive || isDiarizing ? "text-violet-600" : "text-slate-800"
           }`}
         >
           {isUploading ? "Uploading..." : systemStatus}
         </p>
+
+        {isDiarizing && (
+          <div className="mt-3">
+            <div className="mb-1 flex items-center justify-between">
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-violet-500">
+                Diarizing
+              </span>
+              <span className="font-mono text-xs font-bold tabular-nums text-slate-600">
+                {Math.round(Math.min(100, Math.max(0, diarizeProgress)))}%
+              </span>
+            </div>
+            <div className="h-2 w-full overflow-hidden rounded-full bg-slate-200/70">
+              <div
+                className="h-full rounded-full bg-linear-to-r from-violet-500 to-blue-500 transition-all duration-300 ease-out"
+                style={{
+                  width: `${Math.min(100, Math.max(0, diarizeProgress))}%`,
+                }}
+              />
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="flex rounded-xl border border-white/60 bg-white/40 p-1 backdrop-blur-md">
@@ -117,12 +142,7 @@ export default function CaptureControls({
       >
         {activeTab === "live" ? (
           <>
-            {/* HEIGHT-driven layout:
-                  tall windows  -> vertical stack (circle on top, controls below)
-                  short windows (<=700px height) -> 50/50 split (circle left, controls right)
-                  so vertical space is only "split" when it's actually scarce. */}
             <div className="flex w-full min-h-0 flex-1 flex-col items-center justify-center gap-4 [@media(max-height:700px)]:flex-row [@media(max-height:700px)]:justify-between">
-              {/* Circle group: top when stacked, left 50% when split. */}
               <div className="flex min-w-0 flex-col items-center justify-center [@media(max-height:700px)]:flex-1">
                 <div className="session-circle relative h-40 w-40 shrink-0 bg-transparent shadow-none">
                   <SiriWave isRecording={isRecording} isPaused={isPaused} />
@@ -137,10 +157,7 @@ export default function CaptureControls({
                 </div>
               </div>
 
-              {/* Controls: below the circle when stacked, right 50% when split.
-                  Always each on its own line. */}
               <div className="session-controls flex min-w-0 flex-col items-center justify-center gap-2 [@media(max-height:700px)]:flex-1">
-                {/* Microphone — always its own line. */}
                 <div className="flex max-w-full items-center gap-1.5 rounded-full border border-white/60 bg-white/50 px-3 py-1.5 text-xs font-semibold text-slate-600 shadow-sm backdrop-blur-md md:text-sm">
                   <Mic className="h-3.5 w-3.5 shrink-0 text-violet-500" />
                   <span
@@ -151,10 +168,7 @@ export default function CaptureControls({
                   </span>
                 </div>
 
-                {/* Language + Quality: stacked (line-by-line) normally; side-by-side
-                    only on a full wide+tall desktop (.session-langquality media). */}
                 <div className="session-langquality flex flex-col items-center gap-2">
-                  {/* Language */}
                   <div className="flex max-w-full items-center gap-1.5 rounded-full border border-white/60 bg-white/50 px-3 py-1.5 text-xs font-semibold text-slate-600 shadow-sm backdrop-blur-md md:text-sm">
                     <Globe className="h-3.5 w-3.5 shrink-0 text-blue-500" />
                     <span
@@ -171,7 +185,6 @@ export default function CaptureControls({
                     </span>
                   </div>
 
-                  {/* Audio quality */}
                   <div className="flex max-w-full items-center gap-1.5 rounded-full border border-white/60 bg-white/50 px-3 py-1.5 text-xs font-semibold text-slate-600 shadow-sm backdrop-blur-md md:text-sm">
                     <Activity
                       className={`h-3.5 w-3.5 shrink-0 ${
@@ -188,7 +201,6 @@ export default function CaptureControls({
               </div>
             </div>
 
-            {/* Controls pinned to the bottom of the column — never overlapped. */}
             <div className="mt-auto flex w-full shrink-0 flex-col items-center gap-2 lg:gap-4">
               <div className="flex h-5 items-center justify-center">
                 {isActive ? (

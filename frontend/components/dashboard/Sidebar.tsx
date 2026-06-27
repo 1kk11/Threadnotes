@@ -1,5 +1,4 @@
 import {
-  FileText,
   LayoutDashboard,
   CalendarDays,
   LogOut,
@@ -15,9 +14,7 @@ type SidebarProps = {
   userName?: string | null;
   onLogout?: () => void;
   onDeleteAccount?: () => void;
-  /** Controls display + width per context (desktop rail vs mobile drawer). */
   className?: string;
-  /** Fired after any nav/action — lets the mobile drawer close itself. */
   onItemSelect?: () => void;
 };
 
@@ -46,9 +43,12 @@ export default function Sidebar({
       className={`${className ?? "flex w-64"} min-h-0 shrink-0 flex-col border-r border-white/60 bg-white/50 backdrop-blur-xl`}
     >
       <div className="flex items-center gap-2.5 px-5 py-5">
-        <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-linear-to-br from-violet-500 to-blue-500 shadow-md shadow-violet-500/30">
-          <FileText className="h-5 w-5 text-white" strokeWidth={2.2} />
-        </div>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src="/app-icon.ico"
+          alt="ThreadNotes"
+          className="h-9 w-9 rounded-xl shadow-md shadow-violet-500/30"
+        />
         <span className="text-lg font-bold tracking-tight text-slate-900">
           ThreadNotes
         </span>

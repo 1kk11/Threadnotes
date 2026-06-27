@@ -19,7 +19,6 @@ export default function MobileSidebar({
   onClose,
   ...sidebarProps
 }: MobileSidebarProps) {
-  // Close on Escape for keyboard/accessibility.
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -34,7 +33,6 @@ export default function MobileSidebar({
       className={`fixed inset-0 z-200 lg:hidden ${open ? "" : "pointer-events-none"}`}
       aria-hidden={!open}
     >
-      {/* Backdrop */}
       <div
         onClick={onClose}
         className={`absolute inset-0 bg-slate-900/40 backdrop-blur-sm transition-opacity duration-300 ${
@@ -42,7 +40,6 @@ export default function MobileSidebar({
         }`}
       />
 
-      {/* Sliding drawer */}
       <div
         role="dialog"
         aria-modal="true"

@@ -74,7 +74,6 @@ def _diagnose_env():
             len(val) if val else 0,
         )
 
-    # Gmail OAuth secret files (Render Secret Files). Log existence + size only.
     for label, path in (
         ("credentials.json", GMAIL_CREDENTIALS_PATH),
         ("token.json", GMAIL_TOKEN_PATH),
@@ -94,7 +93,6 @@ security = HTTPBearer(auto_error=True)
 
 otp_storage: Dict[str, dict] = {}
 signup_otp_storage: Dict[str, dict] = {}
-# email -> datetime when the verified status expires (10 min after OTP verify).
 verified_emails: Dict[str, datetime] = {}
 
 _users_cont = None
@@ -118,10 +116,6 @@ def build_openai_client():
     key = (os.getenv("AZURE_OPENAI_KEY") or os.getenv("OPENAI_API_KEY") or "").strip()
     if not key:
         raise HTTPException(status_code=500, detail="OpenAI/Azure OpenAI key is missing in the vault.")
-    # timeout=1500s gives a long (~23 min) chunk enough time to fully diarize
-    # without the client cutting it off mid-process. max_retries=0 so a failure
-    # surfaces IMMEDIATELY with a clear reason instead of silently re-uploading
-    # and re-processing the whole chunk 2-3 more times (which looked like a hang).
     if endpoint:
         return AzureOpenAI(
             api_key=key,
@@ -185,7 +179,6 @@ class DeleteAccountRequest(BaseModel):
 
 
 OTP_TTL = timedelta(minutes=5)
-# How long a verified email stays valid for signup after OTP verification.
 VERIFIED_TTL = timedelta(minutes=10)
 
 
@@ -195,10 +188,6 @@ def _generate_otp() -> str:
 
 
 GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.send"]
-# backend/ dir = one level up from this file (backend/vault/main.py -> backend/),
-# resolved from __file__ so it doesn't depend on the process working directory.
-# credentials.json / token.json physically live in backend/. Both paths stay
-# env-overridable (e.g. GMAIL_TOKEN_PATH=/etc/secrets/token.json on Render).
 _BACKEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 GMAIL_CREDENTIALS_PATH = os.getenv(
     "GMAIL_CREDENTIALS_PATH", os.path.join(_BACKEND_DIR, "credentials.json")
@@ -240,7 +229,7 @@ def _build_gmail_service():
         if not creds.valid:
             if creds.expired and creds.refresh_token:
                 print("[GMAIL] access token expired — refreshing via refresh_token")
-                creds.refresh(Request())  # in-memory only; secret file stays read-only
+                creds.refresh(Request())
             else:
                 raise HTTPException(
                     status_code=500,
@@ -254,8 +243,6 @@ def _build_gmail_service():
     except Exception as e:
         traceback.print_exc()
         print(f"CRITICAL GMAIL ERROR: {repr(e)}")
-        # Preserve descriptive HTTPExceptions (missing file / unrefreshable creds);
-        # wrap anything else (RefreshError, FileNotFoundError, ...) with its repr.
         if isinstance(e, HTTPException):
             raise
         raise HTTPException(
@@ -273,7 +260,7 @@ def _get_gmail_service():
 
 def send_otp_email(target_email: str, otp: str, subject_prefix: str):
     try:
-        service = _get_gmail_service()  # may raise HTTP 500 (creds/file issues)
+        service = _get_gmail_service()
 
         msg = MIMEMultipart()
         sender = os.getenv("GMAIL_SENDER")
@@ -292,8 +279,6 @@ def send_otp_email(target_email: str, otp: str, subject_prefix: str):
     except Exception as e:
         traceback.print_exc()
         print(f"CRITICAL GMAIL ERROR: {repr(e)}")
-        # Preserve a descriptive HTTPException from _get_gmail_service; otherwise
-        # surface the underlying send error (HttpError, RefreshError, ...).
         if isinstance(e, HTTPException):
             raise
         raise HTTPException(
@@ -349,8 +334,6 @@ def verify_signup_otp(req: OTPVerifyRequest):
             detail="Verification OTP has expired. Please request a new one.",
         )
 
-    # Mark the email verified for a limited window so the user doesn't have to
-    # sign up immediately. The OTP itself is single-use — consume it now.
     verified_emails[req.email] = datetime.now(timezone.utc) + VERIFIED_TTL
     signup_otp_storage.pop(req.email, None)
     return {"status": "success", "message": "Email verified successfully."}
@@ -358,7 +341,6 @@ def verify_signup_otp(req: OTPVerifyRequest):
 
 @app.post("/signup")
 def signup(user: UserSignup):
-    # Require a still-valid email verification (set by /verify-signup-otp).
     verified_until = verified_emails.get(user.email)
     if not verified_until or datetime.now(timezone.utc) >= verified_until:
         verified_emails.pop(user.email, None)
@@ -388,7 +370,6 @@ def signup(user: UserSignup):
         "createdAt": datetime.now(timezone.utc).isoformat(),
     }
     users_cont.create_item(user_doc)
-    # Single-use: consume the verification so it can't seed another signup.
     verified_emails.pop(user.email, None)
     signup_otp_storage.pop(user.email, None)
     return {"status": "success", "message": "Account created"}
@@ -431,8 +412,6 @@ def forgot_password(req: ForgotPasswordRequest):
             enable_cross_partition_query=True,
         )
     )
-    # Always return the same generic response so callers cannot tell whether the
-    # email is registered (prevents user enumeration).
     generic_response = {
         "status": "success",
         "message": "If an account exists for that email, a reset OTP has been sent.",
@@ -455,7 +434,6 @@ def reset_password(req: ResetPasswordRequest):
     if not entry or entry.get("otp") != req.otp:
         raise HTTPException(status_code=400, detail="Invalid OTP.")
     if datetime.now(timezone.utc) >= entry["expires_at"]:
-        # Expired — clear it so it can't be retried.
         otp_storage.pop(req.email, None)
         raise HTTPException(
             status_code=400, detail="OTP has expired. Please request a new one."
@@ -477,7 +455,6 @@ def reset_password(req: ResetPasswordRequest):
         req.new_password.encode("utf-8"), bcrypt.gensalt()
     ).decode("utf-8")
     users_cont.upsert_item(user_doc)
-    # Invalidate the OTP immediately after a successful reset to prevent reuse.
     otp_storage.pop(req.email, None)
     return {"status": "success", "message": "Password updated successfully!"}
 
@@ -517,7 +494,6 @@ def _delete_user_transcripts(user_id: str) -> int:
                 pass
         return deleted
     except Exception:
-        # Container missing or any other error — nothing to cascade.
         return 0
 
 
@@ -543,19 +519,15 @@ def delete_account(
 
     user_doc = user_list[0]
 
-    # Re-verify the password to prevent accidental/malicious deletion.
     stored_hash = (user_doc.get("password") or "").encode("utf-8")
     if not stored_hash or not bcrypt.checkpw(
         req.confirm_password.encode("utf-8"), stored_hash
     ):
         raise HTTPException(status_code=401, detail="Incorrect password.")
 
-    # Cascade: remove associated cloud transcripts (best-effort), then the user.
     deleted_transcripts = _delete_user_transcripts(email)
 
     try:
-        # Resolve the container's partition key dynamically so delete_item works
-        # regardless of whether it's /email, /id, /tenantId, etc.
         props = users_cont.read()
         pk_path = (props.get("partitionKey", {}).get("paths") or ["/id"])[0]
         pk_value = user_doc.get(pk_path.strip("/"), user_doc.get("id"))
@@ -565,7 +537,6 @@ def delete_account(
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to delete account: {exc}")
 
-    # Drop any pending auth state for this email so nothing lingers.
     verified_emails.pop(email, None)
     otp_storage.pop(email, None)
     signup_otp_storage.pop(email, None)
@@ -642,8 +613,6 @@ def _create_diarized_transcription(client, deployment, safe_name, audio_bytes, m
     try:
         return client.audio.transcriptions.create(**base)
     except Exception as exc:
-        # Surface the ACTUAL Azure error body (status + payload), not just the
-        # opaque httpx status line, so any real 400 reason is visible in logs.
         body = getattr(getattr(exc, "response", None), "text", None)
         status = getattr(getattr(exc, "response", None), "status_code", None)
         print(
@@ -664,31 +633,26 @@ def _friendly_diarize_error(exc: Exception) -> str:
     name = type(exc).__name__.lower()
     msg = str(exc).lower()
 
-    # Client cut the call off — the audio took longer than the time limit.
     if "timeout" in name or "timed out" in msg or status == 408:
         return (
             "This recording is too long to process in one go and timed out. "
             "Please try a shorter recording, or split it into smaller parts."
         )
-    # Couldn't reach the transcription service at all.
     if "connection" in name or "connect" in msg:
         return (
             "We couldn't reach the transcription service. "
             "Please check your internet connection and try again."
         )
-    # Service is overloaded / quota hit.
     if status == 429 or "rate limit" in msg or "ratelimit" in name:
         return (
             "The transcription service is busy right now. "
             "Please wait a minute and try again."
         )
-    # Authentication / permission problems (config issue, not the user's fault).
     if status in (401, 403) or "authentication" in name or "permission" in name:
         return (
             "The transcription service rejected our credentials. "
             "Please contact support — this is a configuration issue, not your file."
         )
-    # Bad input — usually audio too long for the model, or unsupported/corrupt.
     if status == 400 or "bad request" in msg or "invalid" in msg:
         if "duration" in msg or "1500" in msg or "too long" in msg:
             return (
@@ -699,23 +663,15 @@ def _friendly_diarize_error(exc: Exception) -> str:
             "This audio couldn't be processed. It may be in an unsupported "
             "format or corrupted. Please try a different file."
         )
-    # Anything else.
     return (
         "Something went wrong while transcribing this audio. "
         "Please try again in a moment."
     )
 
 
-# --- Dynamic ghost-speaker cleanup ------------------------------------------
-# A "ghost" is a speaker whose ENTIRE contribution to the recording is trivially
-# small — a few words AND a very short total speaking time. These are the
-# coughs / "Hmm" / "Yeah" crosstalk the model over-segments into new speakers.
-# Thresholds are absolute per-speaker FLOORS (plus a relative check), NOT a cap
-# on the number of speakers — a real 2/4/8-participant meeting keeps every
-# genuine speaker no matter how many there are.
-GHOST_MAX_WORDS = 3          # <= this many words total ...
-GHOST_MAX_DURATION = 2.0     # ... AND <= this many seconds total => ghost
-GHOST_RELATIVE_RATIO = 0.08  # also a ghost if < 8% of the busiest speaker's words
+GHOST_MAX_WORDS = 3
+GHOST_MAX_DURATION = 2.0
+GHOST_RELATIVE_RATIO = 0.08
 
 
 def _speaker_stats(segments: List[dict]) -> Dict[str, dict]:
@@ -746,7 +702,6 @@ def _identify_ghost_speakers(stats: Dict[str, dict]) -> set:
         )
         if absolute_ghost or relative_ghost:
             ghosts.add(sp)
-    # Safety: never flag EVERY speaker as a ghost — always keep the busiest one.
     if len(ghosts) >= len(stats):
         busiest = max(
             stats, key=lambda sp: (stats[sp]["words"], stats[sp]["duration"])
@@ -782,14 +737,12 @@ def _merge_ghost_speakers(segments: List[dict]) -> List[dict]:
     if not ghosts:
         return segments
 
-    # 1) Relabel each ghost segment to its nearest primary speaker.
     for i, seg in enumerate(segments):
         if seg["speaker"] in ghosts:
             target = _nearest_primary_label(segments, i, ghosts)
             if target is not None:
                 seg["speaker"] = target
 
-    # 2) Coalesce now-adjacent same-speaker segments into one speech block.
     merged: List[dict] = []
     for seg in segments:
         if merged and merged[-1]["speaker"] == seg["speaker"]:
@@ -836,21 +789,14 @@ def _run_diarization(audio_bytes: bytes, filename: str, content_type: str = "") 
         text = (seg.get("text") or "").strip()
         if not text:
             continue
-        # Noise filter: don't let short non-verbal fragments (breaths, clicks,
-        # "(breath)", "*", "...", etc.) spawn a brand-new speaker. We skip the
-        # segment entirely so it neither adds clutter nor inflates the count.
         if _is_noise_fragment(text):
             continue
         raw = str(seg.get("speaker", "") or "").strip() or "unknown"
-        # No speaker cap — register as many distinct speakers as the model hears.
         if raw not in speaker_map:
             speaker_map[raw] = f"Speaker {len(speaker_map) + 1}"
         label = speaker_map[raw]
         start = float(seg.get("start", 0.0) or 0.0)
         end = float(seg.get("end", start) or start)
-        # Preserve the diarizer's REAL per-word timestamps when present; only
-        # fall back to proportional interpolation if the model didn't return
-        # word-level timing. Either way the frontend receives {word,start,end}.
         raw_words = seg.get("words")
         if isinstance(raw_words, list) and raw_words:
             words = []
@@ -882,9 +828,6 @@ def _run_diarization(audio_bytes: bytes, filename: str, content_type: str = "") 
             }
         )
 
-    # Dynamic cleanup: fold hallucinated "ghost" speakers (coughs, "Hmm",
-    # transient crosstalk) into the nearest real speaker, then renumber the
-    # surviving speakers 1..N. No fixed speaker cap — real participants are kept.
     segments = _merge_ghost_speakers(segments)
     segments = _renumber_speakers(segments)
     return segments
@@ -908,14 +851,9 @@ async def diarize_stream(
     except HTTPException:
         raise
     except Exception as exc:
-        # Log the full technical detail server-side; return only a clean,
-        # human-readable English sentence to the client (live + upload both).
         traceback.print_exc()
         return {"status": "error", "message": _friendly_diarize_error(exc)}
 
-    # Cloud Vault is a stateless proxy for the OpenAI/Azure diarization call only.
-    # Transcripts are NEVER persisted in Cosmos DB — the renderer saves them to the
-    # user's local PC. Cosmos DB is reserved exclusively for login credentials.
     return {
         "status": "success",
         "segments": segments,

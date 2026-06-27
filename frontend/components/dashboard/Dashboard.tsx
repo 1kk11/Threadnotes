@@ -86,10 +86,12 @@ export default function Dashboard() {
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [mergedTranscript, setMergedTranscript] = useState<MergedTranscriptRow[]>([]);
   const [isDiarizing, setIsDiarizing] = useState(false);
+  const [diarizeProgress, setDiarizeProgress] = useState(0);
   const [currentAudioTime, setCurrentAudioTime] = useState(0);
   const [mergedEditMode, setMergedEditMode] = useState(false);
   const [mergedDraft, setMergedDraft] = useState("");
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const activeWordRef = useRef<HTMLSpanElement | null>(null);
 
   const [showFinishModal, setShowFinishModal] = useState(false);
   const [showNewConvoModal, setShowNewConvoModal] = useState(false);
@@ -109,6 +111,36 @@ export default function Dashboard() {
   const liveRef = useRef(false);
   const interimRef = useRef("");
   const interimRafRef = useRef<number | null>(null);
+  const progressTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const uploadAbortRef = useRef<AbortController | null>(null);
+
+  const stopSmoothProgress = useCallback(() => {
+    if (progressTimerRef.current) {
+      clearInterval(progressTimerRef.current);
+      progressTimerRef.current = null;
+    }
+  }, []);
+
+  const startSmoothProgress = useCallback(
+    (audioDurationSec: number) => {
+      stopSmoothProgress();
+      setDiarizeProgress(2);
+      const estMs = Math.max(8000, audioDurationSec * 1000 * 0.5);
+      const startT = Date.now();
+      progressTimerRef.current = setInterval(() => {
+        const elapsed = Date.now() - startT;
+        const pct = Math.min(92, 2 + (elapsed / estMs) * 90);
+        setDiarizeProgress((p) => (pct > p ? pct : p));
+      }, 200);
+    },
+    [stopSmoothProgress],
+  );
+
+  const handleDiarizeProgress = useCallback((done: number, total: number) => {
+    if (total <= 0) return;
+    const floor = Math.min(96, (done / total) * 100);
+    setDiarizeProgress((p) => (floor > p ? floor : p));
+  }, []);
 
   const handleAzurePartial = useCallback((text: string) => {
     if (!liveRef.current) return;
@@ -153,8 +185,15 @@ export default function Dashboard() {
       onPartial: handleAzurePartial,
       onFinal: handleAzureFinal,
       onError: handleAzureError,
+      onProgress: handleDiarizeProgress,
     });
-  }, [handleAzurePartial, handleAzureFinal, handleAzureError, setCallbacks]);
+  }, [
+    handleAzurePartial,
+    handleAzureFinal,
+    handleAzureError,
+    handleDiarizeProgress,
+    setCallbacks,
+  ]);
 
   useEffect(() => {
     return () => {
@@ -176,6 +215,27 @@ export default function Dashboard() {
   const systemStatus =
     statusMessage ??
     (isPaused ? "Paused" : isRecording ? "Listening..." : "Ready");
+
+  const activeWordStart = useMemo(() => {
+    for (const seg of mergedTranscript) {
+      const ws = seg.words;
+      if (!ws) continue;
+      for (const w of ws) {
+        if (currentAudioTime >= w.start && currentAudioTime < w.end) {
+          return w.start;
+        }
+      }
+    }
+    return null;
+  }, [mergedTranscript, currentAudioTime]);
+
+  useEffect(() => {
+    if (activeWordStart == null) return;
+    activeWordRef.current?.scrollIntoView({
+      block: "center",
+      behavior: "smooth",
+    });
+  }, [activeWordStart]);
 
   useEffect(() => {
     if (!isRecording || isPaused) return;
@@ -230,8 +290,6 @@ export default function Dashboard() {
     return map;
   }, [mergedTranscript]);
 
-  // When a new transcript loads, reset the audio element to the start so the
-  // sync highlighting lines up with the freshly-loaded source.
   useEffect(() => {
     if (mergedTranscript.length === 0) return;
     setCurrentAudioTime(0);
@@ -248,8 +306,6 @@ export default function Dashboard() {
         setMergedDraft(mergedPlainText);
         return true;
       }
-      // Commit edits back onto the rows, preserving timestamps so highlighting
-      // keeps working. Only applied when the paragraph count still maps 1:1.
       const paras = mergedDraft
         .split(/\n{2,}/)
         .map((p) => p.trim())
@@ -319,9 +375,12 @@ export default function Dashboard() {
     setIsPaused(false);
     setIsDiarizing(true);
     setStatusMessage("Processing Audio & Diarizing...");
+    startSmoothProgress(sessionTime);
     try {
       const result = await finishAndUpload();
       if (sid !== sessionIdRef.current) return;
+      stopSmoothProgress();
+      setDiarizeProgress(100);
       if (result?.audioUrl) {
         setCurrentAudioTime(0);
         setAudioUrl((prev) => {
@@ -342,12 +401,22 @@ export default function Dashboard() {
           : "Recording finished",
       );
     } catch (e: any) {
+      stopSmoothProgress();
       if (sid !== sessionIdRef.current) return;
+      setDiarizeProgress(0);
       setStatusMessage(`⚠️ ${e?.message || "Finish failed"}`);
     } finally {
-      setIsDiarizing(false);
+      stopSmoothProgress();
+      if (sid === sessionIdRef.current) setIsDiarizing(false);
     }
-  }, [finishAndUpload, stopLiveEvents, saveTranscriptLocally]);
+  }, [
+    finishAndUpload,
+    stopLiveEvents,
+    saveTranscriptLocally,
+    sessionTime,
+    startSmoothProgress,
+    stopSmoothProgress,
+  ]);
 
   const handleProcessUpload = useCallback(async () => {
     if (!uploadFile) return;
@@ -359,14 +428,14 @@ export default function Dashboard() {
     setIsUploading(true);
     setUploadProgress(2);
 
+    const abort = new AbortController();
+    uploadAbortRef.current = abort;
+
     const token = localStorage.getItem("token");
     const electron =
       typeof window !== "undefined" ? window.electronAPI : undefined;
     const localPath = electron?.getPathForFile?.(uploadFile) || "";
 
-    // Uploaded files live outside the recordings dir, so the media:// scheme
-    // can't serve them. A same-origin blob URL plays reliably in the sandboxed
-    // renderer (and is revoked in clearPlayback). Avoids the file:// block.
     const playbackUrl = URL.createObjectURL(uploadFile);
     setCurrentAudioTime(0);
     setAudioUrl(playbackUrl);
@@ -418,6 +487,7 @@ export default function Dashboard() {
             method: "POST",
             headers: token ? { Authorization: `Bearer ${token}` } : undefined,
             body: form,
+            signal: abort.signal,
           });
           const data = await res.json();
           if (sid !== sessionIdRef.current) return;
@@ -463,6 +533,7 @@ export default function Dashboard() {
         method: "POST",
         headers: token ? { Authorization: `Bearer ${token}` } : undefined,
         body: form,
+        signal: abort.signal,
       });
       const data = await res.json();
       clearInterval(climb);
@@ -482,10 +553,12 @@ export default function Dashboard() {
         "No speech detected in the uploaded file.",
       );
     } catch (e: any) {
-      if (sid !== sessionIdRef.current) return;
+      if (e?.name === "AbortError" || sid !== sessionIdRef.current) return;
       setIsUploading(false);
       setUploadProgress(0);
       setStatusMessage(e?.message || "Could not process the file.");
+    } finally {
+      if (uploadAbortRef.current === abort) uploadAbortRef.current = null;
     }
   }, [uploadFile, clearPlayback, saveTranscriptLocally]);
 
@@ -539,26 +612,51 @@ export default function Dashboard() {
   const doReset = useCallback(() => {
     sessionIdRef.current += 1;
     stopLiveEvents();
-    if (isRecording) cancel();
+    cancel();
+    if (uploadAbortRef.current) {
+      try {
+        uploadAbortRef.current.abort();
+      } catch {}
+      uploadAbortRef.current = null;
+    }
+    stopSmoothProgress();
     clearPlayback();
     setIsRecording(false);
     setIsPaused(false);
+    setIsDiarizing(false);
+    setDiarizeProgress(0);
+    setIsUploading(false);
+    setUploadProgress(0);
     setSessionTime(0);
     setLines([]);
     setInterim("");
+    setMergedTranscript([]);
     setUploadFile(null);
     setStatusMessage(null);
     setActiveTab("live");
     setView("dashboard");
-  }, [isRecording, cancel, clearPlayback, stopLiveEvents]);
+  }, [cancel, clearPlayback, stopLiveEvents, stopSmoothProgress]);
 
   const handleNewConversationClick = useCallback(() => {
-    if (isRecording || lines.length > 0 || mergedTranscript.length > 0) {
+    if (
+      isRecording ||
+      isDiarizing ||
+      isUploading ||
+      lines.length > 0 ||
+      mergedTranscript.length > 0
+    ) {
       setShowNewConvoModal(true);
     } else {
       doReset();
     }
-  }, [isRecording, lines.length, mergedTranscript.length, doReset]);
+  }, [
+    isRecording,
+    isDiarizing,
+    isUploading,
+    lines.length,
+    mergedTranscript.length,
+    doReset,
+  ]);
 
   const handleLogout = useCallback(() => {
     stopLiveEvents();
@@ -588,13 +686,11 @@ export default function Dashboard() {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.detail || "Failed to delete account");
       }
-      // Account is gone — stop everything and wipe all local session state.
       stopLiveEvents();
       if (isRecording) cancel();
       localStorage.clear();
       router.replace("/auth");
     } catch (e: any) {
-      // Keep the modal open so the user can correct the password and retry.
       setDeleting(false);
       setDeleteError(e?.message || "Delete failed");
     }
@@ -612,8 +708,7 @@ export default function Dashboard() {
   }, []);
 
   return (
-    <div className="flex h-dvh w-full overflow-hidden bg-slate-50 text-slate-800">
-      {/* Desktop rail (≥1024px). Hidden on smaller screens — main expands to full width. */}
+    <div className="flex h-full w-full overflow-hidden bg-slate-50 text-slate-800">
       <Sidebar
         className="hidden w-64 lg:flex"
         activeView={view}
@@ -624,7 +719,6 @@ export default function Dashboard() {
         onDeleteAccount={() => setShowDeleteModal(true)}
       />
 
-      {/* Mobile drawer (<1024px), toggled by the hamburger. */}
       <MobileSidebar
         open={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
@@ -639,7 +733,6 @@ export default function Dashboard() {
       <main className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
         <AmbientGlow />
 
-        {/* Mobile top bar with hamburger — fixed height, hidden on desktop. */}
         <header className="relative z-20 flex shrink-0 items-center gap-3 border-b border-white/60 bg-white/50 px-4 py-3 backdrop-blur-xl lg:hidden">
           <button
             onClick={() => setSidebarOpen(true)}
@@ -677,11 +770,7 @@ export default function Dashboard() {
               </button>
             </div>
 
-            {/* Strict 50/50 split — ALWAYS side-by-side, never stacks. */}
             <div className="flex min-h-0 w-full flex-1 flex-row gap-4">
-              {/* Yellow zone (Recording) — 50% width, full height. overflow-x-hidden
-                  kills any horizontal scrollbar; overflow-y-auto keeps a vertical
-                  scroll as a safety on very short windows. */}
               <div className="flex h-full w-1/2 min-h-0 min-w-0 flex-col overflow-x-hidden overflow-y-auto">
                 <CaptureControls
                   isRecording={isRecording}
@@ -689,6 +778,8 @@ export default function Dashboard() {
                   sessionTime={sessionTime}
                   activeTab={activeTab}
                   systemStatus={systemStatus}
+                  isDiarizing={isDiarizing}
+                  diarizeProgress={diarizeProgress}
                   onStart={handleStart}
                   onPause={handlePause}
                   onResume={handleResume}
@@ -704,22 +795,8 @@ export default function Dashboard() {
                   audioQuality={audioQuality}
                 />
               </div>
-              {/* Blue zone (Transcript) — 50% width, full height; scrolls independently. */}
               <div className="flex h-full w-1/2 min-h-0 min-w-0 flex-col">
-                {isDiarizing ? (
-                  <div className="flex min-h-[320px] flex-col items-center justify-center rounded-3xl border border-dashed border-slate-300 bg-white/90 p-10 text-center shadow-sm shadow-slate-200/60">
-                    <div className="mb-4 inline-flex h-14 w-14 items-center justify-center rounded-full bg-violet-50 text-violet-600 shadow-inner shadow-violet-100">
-                      <span className="text-2xl font-black">⏳</span>
-                    </div>
-                    <h3 className="text-xl font-semibold text-slate-900">
-                      Processing Audio &amp; Diarizing...
-                    </h3>
-                    <p className="mt-3 max-w-sm text-sm leading-6 text-slate-500">
-                      The local AI engine is merging your live transcript with
-                      speaker segments. This may take a few seconds.
-                    </p>
-                  </div>
-                ) : mergedTranscript.length > 0 ? (
+                {mergedTranscript.length > 0 ? (
                   <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-white/60 bg-white/60 shadow-[0_8px_30px_rgb(0,0,0,0.06)] backdrop-blur-xl">
                     <div className="flex items-center justify-between bg-linear-to-r from-violet-500 to-blue-500 px-6 py-4">
                       <h3 className="text-base font-bold text-white">
@@ -807,10 +884,13 @@ export default function Dashboard() {
                                         return (
                                           <span
                                             key={wi}
+                                            ref={
+                                              isActive ? activeWordRef : null
+                                            }
                                             className={
                                               isActive
-                                                ? "text-indigo-600 font-bold transition-all"
-                                                : "transition-all"
+                                                ? "rounded-md bg-indigo-100 px-1 py-0.5 font-bold text-indigo-700 shadow-sm ring-1 ring-indigo-200 transition-all duration-150"
+                                                : "transition-all duration-150"
                                             }
                                           >
                                             {w.word}{" "}

@@ -10,6 +10,7 @@ type UseAzureSpeechProps = {
   onPartial?: (text: string) => void;
   onFinal?: (text: string) => void;
   onError?: (message: string) => void;
+  onProgress?: (done: number, total: number) => void;
 };
 
 export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
@@ -17,6 +18,7 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
     onPartial: initialProps?.onPartial,
     onFinal: initialProps?.onFinal,
     onError: initialProps?.onError,
+    onProgress: initialProps?.onProgress,
   });
 
   const setCallbacks = useCallback(
@@ -24,6 +26,7 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
       onPartial?: (text: string) => void;
       onFinal?: (text: string) => void;
       onError?: (message: string) => void;
+      onProgress?: (done: number, total: number) => void;
     }) => {
       callbacksRef.current = { ...callbacksRef.current, ...cbs };
     },
@@ -38,9 +41,6 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
   const renewTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioFilePathRef = useRef<string | null>(null);
-  // Collect MediaRecorder chunks in memory and write ONE complete file on stop.
-  // A single finalized blob always has a valid WebM header + duration, unlike
-  // per-chunk streamed appends which could land headerless/corrupt on some PCs.
   const recordedChunksRef = useRef<Blob[]>([]);
   const qualityIntervalRef = useRef<ReturnType<typeof setInterval> | null>(
     null,
@@ -56,6 +56,7 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
   const reconnectingRef = useRef<boolean>(false);
   const finishingRef = useRef<boolean>(false);
   const reconnectRef = useRef<null | (() => Promise<boolean>)>(null);
+  const diarizeAbortRef = useRef<AbortController | null>(null);
 
   const readJwt = useCallback((): string | null => {
     if (initialProps?.getAuthToken) return initialProps.getAuthToken();
@@ -268,9 +269,6 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
         window.AudioContext || (window as any).webkitAudioContext;
       const audioCtx = new AudioContextClass();
       audioCtxRef.current = audioCtx;
-      // An AudioContext created without a user-gesture can start "suspended";
-      // while suspended NO samples flow to the destination, so MediaRecorder
-      // records silence / zero-size chunks. Resume before wiring the graph.
       if (audioCtx.state === "suspended") {
         console.warn("[Recorder] AudioContext suspended — resuming.");
         await audioCtx.resume();
@@ -318,12 +316,9 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
         mixedStream.getAudioTracks().length,
       );
 
-      // Reset the in-memory chunk buffer; the file is written ONCE on stop.
       recordedChunksRef.current = [];
       audioFilePathRef.current = null;
 
-      // Pin an explicitly-supported container so we don't get a silent
-      // "no recorder for default type" failure on some Chromium builds.
       const PREFERRED_TYPES = [
         "audio/webm;codecs=opus",
         "audio/webm",
@@ -347,8 +342,6 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
       recorder.onerror = (ev) =>
         console.error("[Recorder] MediaRecorder error event:", ev);
 
-      // Just buffer each chunk in memory — no disk writes here. On stop we
-      // combine them into one complete, valid WebM and write it once.
       recorder.ondataavailable = (e) => {
         const size = e.data?.size ?? 0;
         if (e.data && size > 0) {
@@ -443,11 +436,6 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
     });
     recognizerRef.current = null;
 
-    // Stop the recorder and WAIT for its final "stop" event. MediaRecorder
-    // flushes a last "dataavailable" (the tail of the recording) synchronously
-    // before "stop" fires; because ondataavailable extends the write chain
-    // synchronously, awaiting onstop and then the chain guarantees every byte
-    // — including that final chunk — is appended before we close the file.
     await new Promise<void>((resolve) => {
       const recorder = mediaRecorderRef.current;
       if (!recorder || recorder.state === "inactive") return resolve();
@@ -463,7 +451,6 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
         resolve();
       };
       recorder.onstop = done;
-      // Safety net: if onstop never fires, don't hang the finish flow.
       setTimeout(done, 4000);
       try {
         recorder.stop();
@@ -473,8 +460,6 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
       }
     });
 
-    // Combine all buffered chunks into ONE complete WebM and write it once.
-    // A single finalized blob is guaranteed to have a valid header + duration.
     let audioFilePath: string | null = null;
     const recordedChunks = recordedChunksRef.current;
     const recordedBlob =
@@ -489,7 +474,6 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
       } bytes`,
     );
 
-    // Playback URL is produced by the remux step below (media:// scheme).
     let playbackUrl: string | null = null;
 
     if (
@@ -517,8 +501,6 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
       );
     }
 
-    // Finalize the streaming .webm into a seekable .ogg with valid duration
-    // metadata, and serve it over the privileged media:// scheme.
     if (audioFilePath && typeof window !== "undefined" && window.electronAPI?.remuxAudio) {
       try {
         const { mediaUrl } = await window.electronAPI.remuxAudio(audioFilePath);
@@ -531,10 +513,6 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
 
     let mergedTranscript: any[] = [];
 
-    // Diarization is ACOUSTIC (runs on the recorded audio), so it must fire
-    // whenever we have an audio file — independent of whether the live
-    // recognizer happened to emit any interim text. Gating on the live
-    // transcript was the bug that silently produced empty transcripts.
     if (
       audioFilePath &&
       typeof window !== "undefined" &&
@@ -543,6 +521,11 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
       const jwt = readJwt();
       const { chunks, segmentSeconds, mimeType } =
         await window.electronAPI.audioCompressAndRead(audioFilePath);
+
+      const abort = new AbortController();
+      diarizeAbortRef.current = abort;
+
+      callbacksRef.current.onProgress?.(0, chunks.length);
 
       const stitched: any[] = [];
       for (let i = 0; i < chunks.length; i++) {
@@ -560,6 +543,7 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
           method: "POST",
           headers: jwt ? { Authorization: `Bearer ${jwt}` } : undefined,
           body: form,
+          signal: abort.signal,
         });
 
         const result = await response.json();
@@ -590,8 +574,11 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
               : s.words,
           });
         }
+
+        callbacksRef.current.onProgress?.(i + 1, chunks.length);
       }
 
+      diarizeAbortRef.current = null;
       mergedTranscript = stitched;
     }
 
@@ -608,6 +595,12 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
 
   const cancel = useCallback(() => {
     finishingRef.current = true;
+    if (diarizeAbortRef.current) {
+      try {
+        diarizeAbortRef.current.abort();
+      } catch {}
+      diarizeAbortRef.current = null;
+    }
     if (renewTimerRef.current) clearInterval(renewTimerRef.current);
     const r = recognizerRef.current;
     if (r) {
