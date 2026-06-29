@@ -8,6 +8,10 @@ declare global {
       content: string,
       defaultName: string,
     ) => Promise<{ saved: boolean; filePath?: string }>;
+    renameTranscriptFile: (
+      oldPath: string,
+      newBaseName: string,
+    ) => Promise<{ renamed: boolean; filePath?: string; reason?: string }>;
     saveTranscriptLocal: (
       data: unknown,
       baseName?: string,

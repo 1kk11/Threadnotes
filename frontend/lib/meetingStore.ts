@@ -7,6 +7,7 @@ export type StoredMeeting = {
   topic: string;
   date: string;
   transcript: { speaker: string; text: string; timestamp: string }[];
+  filePath?: string;
 };
 
 function currentUserId(): string {
@@ -63,6 +64,17 @@ export function saveMeetings(meetings: StoredMeeting[]): void {
 
 export function addMeeting(meeting: StoredMeeting): void {
   saveMeetings([meeting, ...loadMeetings()]);
+  window.dispatchEvent(new Event(MEETINGS_EVENT));
+}
+
+export function updateMeeting(
+  id: string,
+  patch: Partial<StoredMeeting>,
+): void {
+  const updated = loadMeetings().map((m) =>
+    m.id === id ? { ...m, ...patch } : m,
+  );
+  saveMeetings(updated);
   window.dispatchEvent(new Event(MEETINGS_EVENT));
 }
 

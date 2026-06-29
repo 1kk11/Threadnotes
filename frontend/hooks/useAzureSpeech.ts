@@ -57,6 +57,14 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
   const finishingRef = useRef<boolean>(false);
   const reconnectRef = useRef<null | (() => Promise<boolean>)>(null);
   const diarizeAbortRef = useRef<AbortController | null>(null);
+  const seenLangsRef = useRef<Set<string>>(new Set());
+  const destinationRef = useRef<MediaStreamAudioDestinationNode | null>(null);
+  const micSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const deviceSwitchRef = useRef<null | (() => void)>(null);
+  const deviceSwitchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
 
   const readJwt = useCallback((): string | null => {
     if (initialProps?.getAuthToken) return initialProps.getAuthToken();
@@ -107,6 +115,11 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
         region,
       );
 
+      speechConfig.setProperty(
+        SpeechSDK.PropertyId.SpeechServiceConnection_LanguageIdMode,
+        "Continuous",
+      );
+
       const autoDetectSourceLanguageConfig =
         SpeechSDK.AutoDetectSourceLanguageConfig.fromLanguages([
           "en-US",
@@ -123,8 +136,34 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
         audioConfig,
       );
 
+      const updateDetectedLanguage = (result: any) => {
+        let lang = "";
+        try {
+          lang =
+            SpeechSDK.AutoDetectSourceLanguageResult.fromResult(result)
+              ?.language || "";
+        } catch {}
+        if (!lang) {
+          lang =
+            result.properties?.getProperty(
+              (SpeechSDK.PropertyId as any)
+                .SpeechServiceConnection_AutoDetectSourceLanguageResult,
+            ) || "";
+        }
+        if (!lang) return;
+        seenLangsRef.current.add(lang.toLowerCase().startsWith("hi") ? "hi" : "en");
+        const hasHi = seenLangsRef.current.has("hi");
+        const hasEn = seenLangsRef.current.has("en");
+        setDetectedLanguage(
+          hasHi && hasEn ? "Hinglish" : hasHi ? "Hindi" : "English",
+        );
+      };
+
       recognizer.recognizing = (_s: any, e: any) => {
-        if (e.result.text) callbacksRef.current.onPartial?.(e.result.text);
+        if (e.result.text) {
+          updateDetectedLanguage(e.result);
+          callbacksRef.current.onPartial?.(e.result.text);
+        }
       };
 
       recognizer.recognized = (_s: any, e: any) => {
@@ -132,14 +171,7 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
           e.result.reason === SpeechSDK.ResultReason.RecognizedSpeech &&
           e.result.text
         ) {
-          const lang = e.result.properties.getProperty(
-            (SpeechSDK.PropertyId as any)
-              .SpeechServiceConnection_AutoDetectSourceLanguageResult,
-          );
-          if (lang) {
-            setDetectedLanguage(lang.startsWith("hi") ? "Hindi" : "English");
-          }
-
+          updateDetectedLanguage(e.result);
           callbacksRef.current.onFinal?.(e.result.text);
         }
       };
@@ -213,6 +245,8 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
   const start = useCallback(async (): Promise<boolean> => {
     try {
       finishingRef.current = false;
+      seenLangsRef.current = new Set();
+      setDetectedLanguage("Detecting");
 
       const micStream = await navigator.mediaDevices.getUserMedia({
         audio: true,
@@ -275,9 +309,11 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
       }
       console.log("[Recorder] AudioContext state:", audioCtx.state);
       const destination = audioCtx.createMediaStreamDestination();
+      destinationRef.current = destination;
 
       const micSource = audioCtx.createMediaStreamSource(micStream);
       micSource.connect(destination);
+      micSourceRef.current = micSource;
 
       if (systemStream && systemStream.getAudioTracks().length > 0) {
         const systemSource = audioCtx.createMediaStreamSource(systemStream);
@@ -290,20 +326,22 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
       const analyser = audioCtx.createAnalyser();
       analyser.fftSize = 256;
       micSource.connect(analyser);
+      analyserRef.current = analyser;
       const bufferLength = analyser.frequencyBinCount;
       const dataArray = new Uint8Array(bufferLength);
 
       if (qualityIntervalRef.current) clearInterval(qualityIntervalRef.current);
       qualityIntervalRef.current = setInterval(() => {
-        if (!isPausedRef.current && analyser) {
-          analyser.getByteFrequencyData(dataArray);
+        if (!isPausedRef.current && analyserRef.current) {
+          analyserRef.current.getByteFrequencyData(dataArray);
           let sum = 0;
           for (let i = 0; i < bufferLength; i++) sum += dataArray[i];
           const average = sum / bufferLength;
 
-          if (average < 10) setAudioQuality("Low (Speak Louder)");
-          else if (average < 50) setAudioQuality("Medium");
-          else setAudioQuality("Good");
+          if (average < 8) setAudioQuality("Bad");
+          else if (average < 30) setAudioQuality("Medium");
+          else if (average < 70) setAudioQuality("Good");
+          else setAudioQuality("Excellent");
         }
       }, 1000);
 
@@ -367,6 +405,51 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
         () => startRenewalLoop(),
         (err) => callbacksRef.current.onError?.(String(err)),
       );
+
+      const handleDeviceChange = () => {
+        if (deviceSwitchTimerRef.current) {
+          clearTimeout(deviceSwitchTimerRef.current);
+        }
+        deviceSwitchTimerRef.current = setTimeout(async () => {
+          if (finishingRef.current || isPausedRef.current) return;
+          const ctx = audioCtxRef.current;
+          const dest = destinationRef.current;
+          if (!ctx || !dest || ctx.state === "closed") return;
+          try {
+            const newStream = await navigator.mediaDevices.getUserMedia({
+              audio: true,
+            });
+            const newLabel = newStream.getAudioTracks()[0]?.label;
+            const oldLabel = micStreamRef.current?.getAudioTracks()[0]?.label;
+            if (newLabel && oldLabel && newLabel === oldLabel) {
+              newStream.getTracks().forEach((t) => t.stop());
+              return;
+            }
+            const newSource = ctx.createMediaStreamSource(newStream);
+            newSource.connect(dest);
+            if (analyserRef.current) newSource.connect(analyserRef.current);
+            try {
+              micSourceRef.current?.disconnect();
+            } catch {}
+            micStreamRef.current?.getTracks().forEach((t) => t.stop());
+            micSourceRef.current = newSource;
+            micStreamRef.current = newStream;
+            if (newLabel) setMicLabel(newLabel);
+            console.log("[Recorder] mic device hot-swapped →", newLabel);
+          } catch (err) {
+            console.warn(
+              "[Recorder] device switch failed — keeping current mic:",
+              err,
+            );
+          }
+        }, 400);
+      };
+      deviceSwitchRef.current = handleDeviceChange;
+      navigator.mediaDevices.addEventListener(
+        "devicechange",
+        handleDeviceChange,
+      );
+
       return true;
     } catch (e: any) {
       callbacksRef.current.onError?.(e?.message || "Failed to start");
@@ -402,6 +485,17 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
 
   const cleanupStreams = useCallback(() => {
     if (qualityIntervalRef.current) clearInterval(qualityIntervalRef.current);
+    if (deviceSwitchRef.current) {
+      navigator.mediaDevices.removeEventListener(
+        "devicechange",
+        deviceSwitchRef.current,
+      );
+      deviceSwitchRef.current = null;
+    }
+    if (deviceSwitchTimerRef.current) {
+      clearTimeout(deviceSwitchTimerRef.current);
+      deviceSwitchTimerRef.current = null;
+    }
     micStreamRef.current?.getTracks().forEach((t) => t.stop());
     systemStreamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current?.getTracks().forEach((t) => t.stop());
@@ -414,6 +508,9 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
     systemStreamRef.current = null;
     streamRef.current = null;
     audioCtxRef.current = null;
+    destinationRef.current = null;
+    micSourceRef.current = null;
+    analyserRef.current = null;
   }, []);
 
   const finishAndUpload = useCallback(async (): Promise<any> => {

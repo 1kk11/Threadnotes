@@ -566,6 +566,9 @@ export default function Dashboard() {
     if (!transcriptText.trim() && mergedTranscript.length === 0) return;
     const defaultName = `ThreadNotes_Transcript_${new Date().toISOString().slice(0, 10)}.txt`;
 
+    let savedFilePath: string | undefined;
+    let savedName: string | undefined;
+
     try {
       if (typeof window !== "undefined" && window.electronAPI) {
         const result = await window.electronAPI.saveTranscript(
@@ -575,6 +578,13 @@ export default function Dashboard() {
         if (!result.saved) {
           setStatusMessage("Ready");
           return;
+        }
+        savedFilePath = result.filePath;
+        if (savedFilePath) {
+          savedName = savedFilePath
+            .split(/[\\/]/)
+            .pop()
+            ?.replace(/\.[^.]+$/, "");
         }
       } else {
         const blob = new Blob([transcriptText], { type: "text/plain" });
@@ -598,9 +608,10 @@ export default function Dashboard() {
         entries[0]?.text.split(" ").slice(0, 5).join(" ") || "Discussion";
       const record = {
         id: Date.now().toString(),
-        topic: `Meeting on ${firstWords}...`,
+        topic: savedName || `Meeting on ${firstWords}`,
         date: new Date().toISOString(),
         transcript: entries,
+        filePath: savedFilePath,
       };
       addMeeting(record);
       setStatusMessage("✅ Saved!");

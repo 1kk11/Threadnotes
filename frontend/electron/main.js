@@ -338,6 +338,25 @@ ipcMain.handle("save-transcript", async(_event, { content, defaultName }) => {
     return { saved: true, filePath };
 });
 
+ipcMain.handle("rename-transcript-file", async(_event, { oldPath, newBaseName } = {}) => {
+    if (!oldPath || !newBaseName) return { renamed: false };
+
+    const dir = path.dirname(oldPath);
+    const ext = path.extname(oldPath) || ".txt";
+    const safeBase = String(newBaseName).replace(/[\\/:*?"<>|]+/g, "_").trim().slice(0, 120) || "Transcript";
+    const newPath = path.join(dir, `${safeBase}${ext}`);
+
+    if (newPath === oldPath) return { renamed: true, filePath: oldPath };
+
+    try {
+        if (!fs.existsSync(oldPath)) return { renamed: false, reason: "missing" };
+        await fs.promises.rename(oldPath, newPath);
+        return { renamed: true, filePath: newPath };
+    } catch (err) {
+        return { renamed: false, reason: String(err && err.message ? err.message : err) };
+    }
+});
+
 function getLocalTranscriptsDirectory() {
     const dir = path.join(app.getPath("documents"), "ThreadNotes");
     fs.mkdirSync(dir, { recursive: true });

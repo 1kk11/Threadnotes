@@ -7,6 +7,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
     saveTranscript: (content, defaultName) =>
         ipcRenderer.invoke("save-transcript", { content, defaultName }),
+    renameTranscriptFile: (oldPath, newBaseName) =>
+        ipcRenderer.invoke("rename-transcript-file", { oldPath, newBaseName }),
     saveTranscriptLocal: (data, baseName, extension) =>
         ipcRenderer.invoke("save-transcript-local", { data, baseName, extension }),
     getDesktopSourceId: () => ipcRenderer.invoke("get-desktop-source-id"),

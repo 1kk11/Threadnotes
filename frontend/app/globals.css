@@ -132,6 +132,11 @@ select:focus, input:focus, textarea:focus {
   100% { opacity: 1; transform: translateY(0) scale(1); }
 }
 
+@keyframes loadbar {
+  0% { transform: translateX(-120%); }
+  100% { transform: translateX(420%); }
+}
+
 .custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
 .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
 .custom-scrollbar::-webkit-scrollbar-thumb { 

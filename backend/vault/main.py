@@ -393,7 +393,7 @@ def login(user: UserLogin):
     token_data = {
         "sub": user_list[0]["email"],
         "tenantId": user_list[0]["tenantId"],
-        "exp": datetime.now(timezone.utc) + timedelta(hours=24),
+        "exp": datetime.now(timezone.utc) + timedelta(days=30),
     }
     return {
         "access_token": jwt.encode(token_data, SECRET_KEY, algorithm=ALGORITHM),

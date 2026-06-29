@@ -158,44 +158,45 @@ export default function CaptureControls({
               </div>
 
               <div className="session-controls flex min-w-0 flex-col items-center justify-center gap-2 [@media(max-height:700px)]:flex-1">
-                <div className="flex max-w-full items-center gap-1.5 rounded-full border border-white/60 bg-white/50 px-3 py-1.5 text-xs font-semibold text-slate-600 shadow-sm backdrop-blur-md md:text-sm">
+                <div className="group relative flex max-w-full items-center gap-1.5 rounded-full border border-white/60 bg-white/50 px-3 py-1.5 text-xs font-semibold text-slate-600 shadow-sm backdrop-blur-md md:text-sm">
                   <Mic className="h-3.5 w-3.5 shrink-0 text-violet-500" />
+                  <span className="max-w-[200px] truncate sm:max-w-[240px]">
+                    {micLabel}
+                  </span>
                   <span
-                    className="max-w-[200px] truncate sm:max-w-[240px]"
-                    title={micLabel}
+                    role="tooltip"
+                    className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 hidden w-max max-w-[260px] -translate-x-1/2 whitespace-normal break-words rounded-lg bg-slate-900 px-3 py-2 text-center text-xs font-medium leading-snug text-white shadow-xl group-hover:block"
                   >
                     {micLabel}
+                    <span className="absolute left-1/2 top-full h-2 w-2 -translate-x-1/2 -translate-y-1/2 rotate-45 bg-slate-900" />
                   </span>
                 </div>
 
                 <div className="session-langquality flex flex-col items-center gap-2">
                   <div className="flex max-w-full items-center gap-1.5 rounded-full border border-white/60 bg-white/50 px-3 py-1.5 text-xs font-semibold text-slate-600 shadow-sm backdrop-blur-md md:text-sm">
                     <Globe className="h-3.5 w-3.5 shrink-0 text-blue-500" />
-                    <span
-                      className="truncate"
-                      title={
-                        detectedLanguage === "Auto-detect"
-                          ? "Detecting..."
-                          : detectedLanguage
-                      }
-                    >
-                      {detectedLanguage === "Auto-detect"
-                        ? "Detecting..."
-                        : detectedLanguage}
+                    <span className="truncate">
+                      {isRecording && !isPaused ? detectedLanguage : "Language"}
                     </span>
                   </div>
 
                   <div className="flex max-w-full items-center gap-1.5 rounded-full border border-white/60 bg-white/50 px-3 py-1.5 text-xs font-semibold text-slate-600 shadow-sm backdrop-blur-md md:text-sm">
                     <Activity
                       className={`h-3.5 w-3.5 shrink-0 ${
-                        audioQuality === "Good"
-                          ? "text-emerald-500"
-                          : audioQuality === "Medium"
-                            ? "text-amber-500"
-                            : "text-rose-500"
+                        !(isRecording && !isPaused)
+                          ? "text-slate-400"
+                          : audioQuality === "Excellent"
+                            ? "text-emerald-500"
+                            : audioQuality === "Good"
+                              ? "text-green-500"
+                              : audioQuality === "Medium"
+                                ? "text-amber-500"
+                                : "text-rose-500"
                       }`}
                     />
-                    <span className="truncate">{audioQuality}</span>
+                    <span className="truncate">
+                      {isRecording && !isPaused ? audioQuality : "Audio Quality"}
+                    </span>
                   </div>
                 </div>
               </div>
@@ -220,7 +221,7 @@ export default function CaptureControls({
                   <p className="text-xs font-medium text-slate-400">
                     {isPaused
                       ? "Paused — resume when you're ready"
-                      : "Ready to capture meeting insights…"}
+                      : "You're using the trial version"}
                   </p>
                 )}
               </div>

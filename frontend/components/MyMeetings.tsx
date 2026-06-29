@@ -3,7 +3,12 @@ import { useState, useEffect, useMemo, useRef } from "react";
 import Calendar from "react-calendar";
 import "react-calendar/dist/Calendar.css";
 import { Download, CalendarDays } from "lucide-react";
-import { loadMeetings, saveMeetings, MEETINGS_EVENT } from "@/lib/meetingStore";
+import {
+  loadMeetings,
+  saveMeetings,
+  updateMeeting,
+  MEETINGS_EVENT,
+} from "@/lib/meetingStore";
 
 type TranscriptEntry = { speaker: string; text: string; timestamp: string };
 type Meeting = {
@@ -11,6 +16,7 @@ type Meeting = {
   topic: string;
   date: string;
   transcript: TranscriptEntry[];
+  filePath?: string;
 };
 
 function useDebounce<T>(value: T, delay: number): T {
@@ -32,6 +38,9 @@ export default function MyMeetings() {
 
   const [meetingToDelete, setMeetingToDelete] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editValue, setEditValue] = useState("");
 
   const searchInputRef = useRef<HTMLInputElement>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -83,6 +92,42 @@ export default function MyMeetings() {
   };
 
   const loadLocalMeetings = () => setMeetings(loadMeetings());
+
+  const startEditing = (meeting: Meeting) => {
+    setEditingId(meeting.id);
+    setEditValue(meeting.topic);
+  };
+
+  const cancelEditing = () => {
+    setEditingId(null);
+    setEditValue("");
+  };
+
+  const saveTopicEdit = async (meeting: Meeting) => {
+    const newTopic = editValue.trim();
+    if (!newTopic || newTopic === meeting.topic) {
+      cancelEditing();
+      return;
+    }
+
+    let newFilePath = meeting.filePath;
+    const electron =
+      typeof window !== "undefined" ? window.electronAPI : undefined;
+    if (meeting.filePath && electron?.renameTranscriptFile) {
+      try {
+        const res = await electron.renameTranscriptFile(
+          meeting.filePath,
+          newTopic,
+        );
+        if (res?.renamed && res.filePath) newFilePath = res.filePath;
+      } catch {}
+    }
+
+    updateMeeting(meeting.id, { topic: newTopic, filePath: newFilePath });
+    loadLocalMeetings();
+    cancelEditing();
+    showToast("Renamed");
+  };
 
   useEffect(() => {
     loadLocalMeetings();
@@ -268,9 +313,36 @@ export default function MyMeetings() {
                     className="bg-white px-4 py-3 rounded-xl border border-slate-100 shadow-sm hover:shadow-md hover:border-indigo-200 transition-all duration-300 flex flex-col md:flex-row md:items-center justify-between gap-4 group w-full"
                   >
                     <div className="flex-1 min-w-0 w-full">
-                      <h3 className="font-bold text-[15px] text-slate-800 mb-1.5 truncate w-full">
-                        {meeting.topic}
-                      </h3>
+                      {editingId === meeting.id ? (
+                        <div className="mb-1.5 flex items-center gap-2">
+                          <input
+                            autoFocus
+                            value={editValue}
+                            onChange={(e) => setEditValue(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") saveTopicEdit(meeting);
+                              if (e.key === "Escape") cancelEditing();
+                            }}
+                            onBlur={() => saveTopicEdit(meeting)}
+                            className="w-full rounded-lg border border-indigo-300 px-2.5 py-1.5 text-[15px] font-bold text-slate-800 outline-none focus:ring-2 focus:ring-indigo-500/30"
+                          />
+                          <button
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={() => saveTopicEdit(meeting)}
+                            className="shrink-0 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-indigo-700"
+                          >
+                            Save
+                          </button>
+                        </div>
+                      ) : (
+                        <h3
+                          onDoubleClick={() => startEditing(meeting)}
+                          title="Double-click to rename"
+                          className="font-bold text-[15px] text-slate-800 mb-1.5 w-full break-words cursor-text"
+                        >
+                          {meeting.topic}
+                        </h3>
+                      )}
                       <div className="flex items-center gap-3 text-xs font-semibold text-slate-500">
                         <span>
                           {new Date(meeting.date).toLocaleDateString()}

@@ -5,8 +5,6 @@ import { useAzureSpeech } from "@/hooks/useAzureSpeech";
 
 interface GlobalRecordingContextType extends ReturnType<typeof useAzureSpeech> {
   activeMicName: string;
-  detectedLanguage: string;
-  setDetectedLanguage: (lang: string) => void;
 }
 
 const GlobalRecordingContext = createContext<
@@ -22,9 +20,6 @@ export function GlobalRecordingProvider({
 
   const [activeMicName, setActiveMicName] =
     useState<string>("Detecting Mic...");
-  const [detectedLanguage, setDetectedLanguage] = useState<string>(
-    "Detecting Language...",
-  );
 
   useEffect(() => {
     const detectMicrophone = async () => {
@@ -62,8 +57,6 @@ export function GlobalRecordingProvider({
       value={{
         ...speechState,
         activeMicName,
-        detectedLanguage,
-        setDetectedLanguage,
       }}
     >
       {children}

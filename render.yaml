@@ -6,7 +6,7 @@ services:
     autoDeploy: true
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn backend.vault.main:app --host 0.0.0.0 --port $PORT
-    healthCheckPath: /docs
+    healthCheckPath: /
     envVars:
       - key: JWT_SECRET
         generateValue: true
