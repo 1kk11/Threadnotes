@@ -8,10 +8,35 @@ declare global {
       content: string,
       defaultName: string,
     ) => Promise<{ saved: boolean; filePath?: string }>;
+    saveAudio: (
+      src: string,
+      defaultName?: string,
+    ) => Promise<{ saved: boolean; filePath?: string; reason?: string }>;
+    exportTranscript: (payload: {
+      plainText?: string;
+      diarized?: { speaker: string; text: string }[];
+      view: "diarize" | "transcript";
+      title?: string;
+      defaultName?: string;
+    }) => Promise<{ saved: boolean; filePath?: string; reason?: string }>;
     renameTranscriptFile: (
       oldPath: string,
       newBaseName: string,
     ) => Promise<{ renamed: boolean; filePath?: string; reason?: string }>;
+    onCloseRequested: (callback: () => void) => () => void;
+    confirmClose: () => void;
+    windowMinimize: () => void;
+    windowMaximizeToggle: () => void;
+    windowClose: () => void;
+    recorderSetActive: (active: boolean) => void;
+    recorderSetState: (state: { timeText: string; isPaused: boolean }) => void;
+    recorderAction: (action: "pause" | "resume" | "stop") => void;
+    onRecorderState: (
+      callback: (state: { timeText: string; isPaused: boolean }) => void,
+    ) => () => void;
+    onRecorderAction: (
+      callback: (action: "pause" | "resume" | "stop") => void,
+    ) => () => void;
     saveTranscriptLocal: (
       data: unknown,
       baseName?: string,

@@ -72,9 +72,9 @@ export default function SiriWave({
       const intensity = 0.78 + 0.22 * level;
 
       const grad = ctx.createLinearGradient(0, 0, W, H);
-      grad.addColorStop(0, "#6d28d9");
-      grad.addColorStop(0.55, "#7c3aed");
-      grad.addColorStop(1, "#06b6d4");
+      grad.addColorStop(0, "#1F2540");
+      grad.addColorStop(0.55, "#2FB5AA");
+      grad.addColorStop(1, "#2E6DBE");
 
       ctx.lineCap = "round";
       ctx.lineJoin = "round";
@@ -82,7 +82,7 @@ export default function SiriWave({
       ctx.lineWidth = 1.3 * dpr;
       ctx.globalAlpha = intensity * 0.25;
       ctx.shadowBlur = 22 * dpr;
-      ctx.shadowColor = "rgba(139, 92, 246, 0.6)";
+      ctx.shadowColor = "rgba(47, 181, 170, 0.55)";
 
       for (let i = 0; i < LINES; i++) {
         const f = i / (LINES - 1);

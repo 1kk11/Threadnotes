@@ -11,3 +11,6 @@
 # misc
 *.log
 .DS_Store
+
+# auto-generated per build (stamped by scripts/gen-build-id.js)
+/electron/build-info.json

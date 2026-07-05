@@ -10,13 +10,13 @@ function SplashScreen() {
   return (
     <div className="flex h-full w-full flex-col items-center justify-center gap-7 bg-slate-50">
       <div className="relative flex h-20 w-20 items-center justify-center">
-        <span className="absolute inset-0 animate-ping rounded-2xl bg-violet-400/30" />
-        <span className="absolute inset-0 rounded-2xl bg-violet-500/10 blur-xl" />
+        <span className="absolute inset-0 animate-ping rounded-2xl bg-[#2FB5AA]/25" />
+        <span className="absolute inset-0 rounded-2xl bg-[#2FB5AA]/10 blur-xl" />
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src="/app-icon.ico"
           alt="ThreadNotes"
-          className="relative h-16 w-16 rounded-2xl shadow-lg shadow-violet-500/30"
+          className="relative h-16 w-16 rounded-2xl shadow-lg shadow-[#2FB5AA]/30"
         />
       </div>
 

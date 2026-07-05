@@ -8,6 +8,7 @@ const {
     ipcMain,
     dialog,
     desktopCapturer,
+    screen,
 } = require("electron");
 const { spawn } = require("child_process");
 const path = require("path");
@@ -255,6 +256,116 @@ async function handleMediaProtocol(request) {
     });
 }
 
+let mainWindow = null;
+
+// --- Floating always-on-top recorder widget --------------------------------
+// A tiny frameless window shown while recording so the timer + Pause/Stop stay
+// visible (and draggable) even when the main app is minimized / behind others.
+let recorderWidget = null;
+let recordingActive = false;
+
+function getRecorderWidget() {
+    if (recorderWidget && !recorderWidget.isDestroyed()) return recorderWidget;
+    const W = 240;
+    const H = 110;
+    const { workArea } = screen.getPrimaryDisplay();
+    recorderWidget = new BrowserWindow({
+        width: W,
+        height: H,
+        x: workArea.x + 16,
+        y: workArea.y + workArea.height - H - 16,
+        frame: false,
+        transparent: true,
+        resizable: false,
+        movable: true,
+        alwaysOnTop: true,
+        skipTaskbar: true,
+        show: false,
+        webPreferences: {
+            preload: path.join(__dirname, "preload.js"),
+            contextIsolation: true,
+            nodeIntegration: false,
+            sandbox: true,
+        },
+    });
+    recorderWidget.setAlwaysOnTop(true, "screen-saver");
+    recorderWidget.loadFile(path.join(__dirname, "widget.html"));
+    recorderWidget.on("closed", () => {
+        recorderWidget = null;
+    });
+    return recorderWidget;
+}
+
+function showRecorderWidget() {
+    const w = getRecorderWidget();
+    if (!w.isVisible()) w.showInactive();
+}
+
+function hideRecorderWidget() {
+    if (recorderWidget && !recorderWidget.isDestroyed() && recorderWidget.isVisible()) {
+        recorderWidget.hide();
+    }
+}
+
+ipcMain.on("recorder:set-active", (_e, active) => {
+    recordingActive = !!active;
+    if (!recordingActive) {
+        hideRecorderWidget();
+    } else if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isMinimized()) {
+        showRecorderWidget();
+    }
+});
+
+ipcMain.on("recorder:set-state", (_e, state) => {
+    if (recorderWidget && !recorderWidget.isDestroyed()) {
+        recorderWidget.webContents.send("recorder:state", state);
+    }
+});
+
+ipcMain.on("recorder:action", (_e, action) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("recorder:action", action);
+        if (action === "stop") {
+            if (mainWindow.isMinimized()) mainWindow.restore();
+            mainWindow.focus();
+        }
+    }
+});
+
+// Unique id stamped into electron/build-info.json on every `npm run dist`.
+// Missing (e.g. `npm run dev`) => "dev", so dev never triggers the update flow.
+function getBuildId() {
+    try {
+        const p = path.join(__dirname, "build-info.json");
+        const data = JSON.parse(fs.readFileSync(p, "utf-8"));
+        return String(data.buildId || "dev");
+    } catch {
+        return "dev";
+    }
+}
+
+ipcMain.on("app-confirm-close", () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.__allowClose = true;
+        mainWindow.close();
+    }
+});
+
+ipcMain.on("window-minimize", () => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.minimize();
+});
+
+ipcMain.on("window-maximize-toggle", () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (mainWindow.isMaximized()) mainWindow.unmaximize();
+    else mainWindow.maximize();
+});
+
+ipcMain.on("window-close", () => {
+    // Goes through the normal close flow, so the unsaved-work confirm still runs.
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close();
+});
+
 function createWindow() {
     const win = new BrowserWindow({
         width: 1280,
@@ -264,12 +375,7 @@ function createWindow() {
         icon: path.join(__dirname, "..", "build", "icon.ico"),
         backgroundColor: "#f8fafc",
         autoHideMenuBar: true,
-        titleBarStyle: "hidden",
-        titleBarOverlay: {
-            color: "#EBF2FA",
-            symbolColor: "#475569",
-            height: 40,
-        },
+        frame: false,
         show: false,
         webPreferences: {
             preload: path.join(__dirname, "preload.js"),
@@ -281,9 +387,50 @@ function createWindow() {
 
     Menu.setApplicationMenu(null);
 
+    mainWindow = win;
+    win.__allowClose = false;
+    win.on("close", (e) => {
+        if (win.__allowClose) return;
+        e.preventDefault();
+        win.webContents.send("app-close-requested");
+    });
+
+    // Floating widget only while the app is minimized (and recording).
+    win.on("minimize", () => {
+        if (recordingActive) showRecorderWidget();
+    });
+    win.on("restore", () => hideRecorderWidget());
+    win.on("focus", () => hideRecorderWidget());
+    win.on("closed", () => {
+        if (recorderWidget && !recorderWidget.isDestroyed()) {
+            recorderWidget.destroy();
+        }
+    });
+
     win.once("ready-to-show", () => {
         win.maximize();
         win.show();
+    });
+
+    const ZOOM_STEP = 0.1;
+    const ZOOM_MIN = 0.6;
+    const ZOOM_MAX = 1.6;
+    win.webContents.on("before-input-event", (event, input) => {
+        if (input.type !== "keyDown" || !input.control || input.alt || input.meta) {
+            return;
+        }
+        const wc = win.webContents;
+        const key = input.key;
+        if (key === "=" || key === "+" || key === "Add") {
+            wc.setZoomFactor(Math.min(ZOOM_MAX, +(wc.getZoomFactor() + ZOOM_STEP).toFixed(2)));
+            event.preventDefault();
+        } else if (key === "-" || key === "Subtract") {
+            wc.setZoomFactor(Math.max(ZOOM_MIN, +(wc.getZoomFactor() - ZOOM_STEP).toFixed(2)));
+            event.preventDefault();
+        } else if (key === "0") {
+            wc.setZoomFactor(1.0);
+            event.preventDefault();
+        }
     });
 
     if (isDev) {
@@ -296,7 +443,7 @@ function createWindow() {
     return win;
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
     protocol.handle(APP_SCHEME, handleAppProtocol);
     protocol.handle(MEDIA_SCHEME, handleMediaProtocol);
 
@@ -308,6 +455,25 @@ app.whenReady().then(() => {
     session.defaultSession.setPermissionCheckHandler(
         (_wc, permission) => permission === "media",
     );
+
+    // On a NEW build (updated install), bust the stale HTTP/renderer cache so
+    // no old code/assets linger. localStorage (MyMeetings, etc.) is untouched.
+    try {
+        const buildId = getBuildId();
+        const markerPath = path.join(app.getPath("userData"), "build-id.txt");
+        let prev = null;
+        try {
+            prev = fs.readFileSync(markerPath, "utf-8").trim();
+        } catch {}
+        if (prev !== buildId) {
+            await session.defaultSession.clearCache();
+            try {
+                fs.writeFileSync(markerPath, buildId, "utf-8");
+            } catch {}
+        }
+    } catch (err) {
+        console.warn("[build-id] cache-bust check failed:", err);
+    }
 
     createWindow();
 
@@ -336,6 +502,154 @@ ipcMain.handle("save-transcript", async(_event, { content, defaultName }) => {
 
     await fs.promises.writeFile(filePath, content, "utf-8");
     return { saved: true, filePath };
+});
+
+// Save a recording (from a media:// URL or a raw file path) to a user-chosen
+// location via a native save dialog. The <a download> trick does not work for
+// the custom media:// scheme (Electron navigates the window instead), so the
+// renderer calls this for any media://-backed audio.
+ipcMain.handle("save-audio", async(_event, { src, defaultName } = {}) => {
+    if (!src || typeof src !== "string") return { saved: false, reason: "no-src" };
+
+    let sourcePath = null;
+    try {
+        if (src.startsWith(`${MEDIA_SCHEME}://`)) {
+            const recordingsDir = getRecordingsDirectory();
+            const url = new URL(src);
+            const fileName = path.basename(decodeURIComponent(url.pathname));
+            const candidate = path.normalize(path.join(recordingsDir, fileName));
+            if (candidate.startsWith(recordingsDir) && fs.existsSync(candidate)) {
+                sourcePath = candidate;
+            }
+        } else if (fs.existsSync(src)) {
+            sourcePath = src;
+        }
+    } catch {
+        sourcePath = null;
+    }
+
+    if (!sourcePath) return { saved: false, reason: "not-found" };
+
+    const ext = (path.extname(sourcePath) || ".ogg").toLowerCase();
+    const baseDefault = defaultName || `recording${ext}`;
+
+    const win = BrowserWindow.getFocusedWindow();
+    const { canceled, filePath } = await dialog.showSaveDialog(win, {
+        title: "Save Recording",
+        defaultPath: baseDefault,
+        filters: [
+            { name: "Audio", extensions: [ext.replace(/^\./, "") || "ogg"] },
+            { name: "All Files", extensions: ["*"] },
+        ],
+    });
+
+    if (canceled || !filePath) return { saved: false };
+
+    await fs.promises.copyFile(sourcePath, filePath);
+    return { saved: true, filePath };
+});
+
+// ---- Transcript export (txt / csv / doc / pdf) -------------------------
+function escHtml(s) {
+    return String(s ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+}
+function escCsv(s) {
+    return `"${String(s ?? "").replace(/"/g, '""')}"`;
+}
+function buildExportText(view, plainText, rows, title) {
+    const head = title ? `${title}\n\n` : "";
+    if (view === "diarize" && rows.length) {
+        return head + rows.map((r) => `${r.speaker}: ${r.text}`).join("\n\n");
+    }
+    return head + (plainText || "");
+}
+function buildExportCsv(view, plainText, rows) {
+    if (view === "diarize" && rows.length) {
+        return (
+            "Speaker,Text\n" +
+            rows.map((r) => `${escCsv(r.speaker)},${escCsv(r.text)}`).join("\n")
+        );
+    }
+    const lines = (plainText || "").split(/\n+/).filter((l) => l.trim());
+    return "Text\n" + lines.map((l) => escCsv(l)).join("\n");
+}
+function buildExportHtml(view, plainText, rows, title) {
+    const style =
+        "body{font-family:'Segoe UI',Arial,sans-serif;color:#1F2540;line-height:1.6;padding:32px;}" +
+        "h1{font-size:20px;margin:0 0 18px;}" +
+        ".row{margin-bottom:14px;}" +
+        ".spk{font-weight:bold;color:#2E6DBE;margin-bottom:2px;}" +
+        "p{margin:4px 0;white-space:pre-wrap;}";
+    let body;
+    if (view === "diarize" && rows.length) {
+        body = rows
+            .map(
+                (r) =>
+                    `<div class="row"><div class="spk">${escHtml(
+                        r.speaker,
+                    )}</div><p>${escHtml(r.text)}</p></div>`,
+            )
+            .join("");
+    } else {
+        body = `<p>${escHtml(plainText || "")}</p>`;
+    }
+    return (
+        `<!doctype html><html><head><meta charset="utf-8"><style>${style}</style></head><body>` +
+        (title ? `<h1>${escHtml(title)}</h1>` : "") +
+        body +
+        "</body></html>"
+    );
+}
+
+ipcMain.handle("export-transcript", async(_event, payload = {}) => {
+    const { plainText, diarized, view, title, defaultName } = payload;
+    const rows = Array.isArray(diarized) ? diarized : [];
+    const win = BrowserWindow.getFocusedWindow();
+    const { canceled, filePath } = await dialog.showSaveDialog(win, {
+        title: "Save Transcript",
+        defaultPath: defaultName || "ThreadNotes_Transcript.txt",
+        filters: [
+            { name: "Text", extensions: ["txt"] },
+            { name: "CSV (Excel)", extensions: ["csv"] },
+            { name: "Word Document", extensions: ["doc"] },
+            { name: "PDF", extensions: ["pdf"] },
+        ],
+    });
+    if (canceled || !filePath) return { saved: false };
+
+    const ext = path.extname(filePath).toLowerCase();
+    try {
+        if (ext === ".pdf") {
+            const html = buildExportHtml(view, plainText, rows, title);
+            const tmp = path.join(app.getPath("temp"), `tn-export-${Date.now()}.html`);
+            await fs.promises.writeFile(tmp, html, "utf-8");
+            const pdfWin = new BrowserWindow({
+                show: false,
+                webPreferences: { offscreen: true },
+            });
+            try {
+                await pdfWin.loadFile(tmp);
+                const pdf = await pdfWin.webContents.printToPDF({ printBackground: true });
+                await fs.promises.writeFile(filePath, pdf);
+            } finally {
+                pdfWin.destroy();
+                fs.promises.unlink(tmp).catch(() => {});
+            }
+        } else if (ext === ".csv") {
+            // BOM so Excel reads UTF-8 correctly.
+            await fs.promises.writeFile(filePath, "﻿" + buildExportCsv(view, plainText, rows), "utf-8");
+        } else if (ext === ".doc") {
+            await fs.promises.writeFile(filePath, buildExportHtml(view, plainText, rows, title), "utf-8");
+        } else {
+            await fs.promises.writeFile(filePath, buildExportText(view, plainText, rows, title), "utf-8");
+        }
+        return { saved: true, filePath };
+    } catch (err) {
+        return { saved: false, reason: String(err && err.message ? err.message : err) };
+    }
 });
 
 ipcMain.handle("rename-transcript-file", async(_event, { oldPath, newBaseName } = {}) => {
@@ -497,17 +811,24 @@ ipcMain.handle("audio-compress-and-read", async(_event, filePath) => {
     const outPattern = path.join(dir, `${base}-chunk-%03d.ogg`);
 
     const isWebm = filePath.toLowerCase().endsWith(".webm");
+
+    const buildArgs = (recover) => [
+        "-y",
+        "-fflags", "+genpts+discardcorrupt",
+        "-err_detect", "ignore_err",
+        // On the recovery pass, probe deeply and DON'T force the container so
+        // ffmpeg can resync past a damaged/partial EBML (webm) header instead of
+        // bailing out with "Invalid data found".
+        ...(recover ? ["-analyzeduration", "100M", "-probesize", "100M"] : []),
+        ...(isWebm && !recover ? ["-f", "webm"] : []),
+        "-i", filePath,
+        "-vn", "-ar", "16000", "-ac", "1", "-c:a", "libopus", "-b:a", "24k",
+        "-f", "segment", "-segment_time", String(SEGMENT_SECONDS),
+        outPattern,
+    ];
+
     try {
-        await runFfmpeg([
-            "-y",
-            "-fflags", "+genpts+discardcorrupt",
-            "-err_detect", "ignore_err",
-            ...(isWebm ? ["-f", "webm"] : []),
-            "-i", filePath,
-            "-vn", "-ar", "16000", "-ac", "1", "-c:a", "libopus", "-b:a", "24k",
-            "-f", "segment", "-segment_time", String(SEGMENT_SECONDS),
-            outPattern,
-        ]);
+        await runFfmpeg(buildArgs(false));
     } catch (err) {
         const msg = String(err && err.message ? err.message : err);
         if (/does not contain any stream|Output file is empty/i.test(msg)) {
@@ -515,7 +836,20 @@ ipcMain.handle("audio-compress-and-read", async(_event, filePath) => {
                 "This file has no audio track to transcribe. Please upload a file that contains audio.",
             );
         }
-        throw err;
+        // Corrupt/partial header (EBML parsing failed / invalid data): retry once
+        // with deep probing and no forced container to try to salvage the audio.
+        if (/EBML header parsing failed|Invalid data found|error opening input/i.test(msg)) {
+            console.warn("[Recorder/main] primary decode failed, attempting recovery pass:", msg);
+            try {
+                await runFfmpeg(buildArgs(true));
+            } catch (err2) {
+                throw new Error(
+                    "This recording file is corrupted and could not be read. Please record again — if it keeps happening, disconnect/reconnect your microphone before recording.",
+                );
+            }
+        } else {
+            throw err;
+        }
     }
 
     const produced = (await fs.promises.readdir(dir))

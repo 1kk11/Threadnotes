@@ -1,0 +1,140 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      * {
+        box-sizing: border-box;
+        font-family: "Segoe UI", system-ui, sans-serif;
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: transparent;
+        overflow: hidden;
+        user-select: none;
+      }
+      .card {
+        -webkit-app-region: drag;
+        margin: 8px;
+        padding: 10px 12px;
+        border-radius: 12px;
+        background: #ffffff;
+        border: 1px solid #d9e2e7;
+        box-shadow: 0 12px 30px -8px rgba(31, 37, 64, 0.35);
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .dot {
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        background: #ef4444;
+        box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.5);
+        animation: pulse 1.6s infinite;
+      }
+      .dot.paused {
+        background: #94a3b8;
+        animation: none;
+      }
+      @keyframes pulse {
+        0% {
+          box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.5);
+        }
+        70% {
+          box-shadow: 0 0 0 7px rgba(239, 68, 68, 0);
+        }
+        100% {
+          box-shadow: 0 0 0 0 rgba(239, 68, 68, 0);
+        }
+      }
+      #label {
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: #1f2540;
+      }
+      #time {
+        margin-left: auto;
+        font-variant-numeric: tabular-nums;
+        font-weight: 700;
+        font-size: 14px;
+        color: #1f2540;
+      }
+      button {
+        -webkit-app-region: no-drag;
+        flex: 1;
+        border: none;
+        border-radius: 8px;
+        padding: 7px 0;
+        font-size: 12px;
+        font-weight: 700;
+        color: #fff;
+        cursor: pointer;
+        transition: filter 0.15s;
+      }
+      button:hover {
+        filter: brightness(1.08);
+      }
+      /* Match the in-app floating recorder: Pause = amber, Resume = teal->ocean. */
+      #toggle {
+        background: linear-gradient(90deg, #fbbf24, #f59e0b);
+      }
+      #toggle.resume {
+        background: linear-gradient(90deg, #2fb5aa, #2e6dbe);
+      }
+      #stop {
+        background: linear-gradient(90deg, #f43f5e, #ef4444);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <div class="row">
+        <span class="dot" id="dot"></span>
+        <span id="label">Listening</span>
+        <span id="time">00:00:00</span>
+      </div>
+      <div class="row">
+        <button id="toggle">Pause</button>
+        <button id="stop">Stop</button>
+      </div>
+    </div>
+    <script>
+      const api = window.electronAPI || {};
+      let paused = false;
+
+      const dot = document.getElementById("dot");
+      const label = document.getElementById("label");
+      const timeEl = document.getElementById("time");
+      const toggleBtn = document.getElementById("toggle");
+
+      if (api.onRecorderState) {
+        api.onRecorderState((s) => {
+          if (!s) return;
+          if (typeof s.timeText === "string") timeEl.textContent = s.timeText;
+          paused = !!s.isPaused;
+          toggleBtn.textContent = paused ? "Resume" : "Pause";
+          toggleBtn.classList.toggle("resume", paused);
+          label.textContent = paused ? "Paused" : "Listening";
+          dot.classList.toggle("paused", paused);
+        });
+      }
+
+      toggleBtn.addEventListener("click", () => {
+        api.recorderAction && api.recorderAction(paused ? "resume" : "pause");
+      });
+      document.getElementById("stop").addEventListener("click", () => {
+        api.recorderAction && api.recorderAction("stop");
+      });
+    </script>
+  </body>
+</html>

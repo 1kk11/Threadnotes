@@ -3,16 +3,24 @@ const path = require("path");
 const zlib = require("zlib");
 
 const SIZE = 256;
-const INDIGO = [79, 70, 229];
+// Brand palette: same white document glyph, background is a Teal -> Ocean Blue
+// diagonal gradient (matches the in-app icon). No more indigo/purple.
+const TEAL = [47, 181, 170]; // #2FB5AA
+const OCEAN = [46, 109, 190]; // #2E6DBE
 const WHITE = [255, 255, 255];
+const lerp = (a, b, t) => [
+  Math.round(a[0] + (b[0] - a[0]) * t),
+  Math.round(a[1] + (b[1] - a[1]) * t),
+  Math.round(a[2] + (b[2] - a[2]) * t),
+];
 
 const px = Buffer.alloc(SIZE * SIZE * 4);
-const cx = SIZE / 2;
-const cy = SIZE / 2;
 for (let y = 0; y < SIZE; y++) {
   for (let x = 0; x < SIZE; x++) {
     const i = (y * SIZE + x) * 4;
-    let c = INDIGO;
+    // diagonal top-left (teal) -> bottom-right (ocean)
+    const bg = lerp(TEAL, OCEAN, (x + y) / (2 * (SIZE - 1)));
+    let c = bg;
     const inRect = x > 78 && x < 178 && y > 64 && y < 192;
     const inLines =
       inRect &&
@@ -20,7 +28,7 @@ for (let y = 0; y < SIZE; y++) {
       x > 96 &&
       x < 160;
     if (inRect) c = WHITE;
-    if (inLines) c = INDIGO;
+    if (inLines) c = TEAL; // document lines in brand teal
     px[i] = c[0];
     px[i + 1] = c[1];
     px[i + 2] = c[2];
@@ -77,7 +85,12 @@ entry.writeUInt32LE(png.length, 8);
 entry.writeUInt32LE(22, 12);
 const ico = Buffer.concat([icoHeader, entry, png]);
 
-const outDir = path.join(__dirname, "..", "build");
-fs.mkdirSync(outDir, { recursive: true });
-fs.writeFileSync(path.join(outDir, "icon.ico"), ico);
-console.log("Wrote build/icon.ico (" + ico.length + " bytes)");
+const targets = [
+  path.join(__dirname, "..", "build", "icon.ico"),
+  path.join(__dirname, "..", "public", "app-icon.ico"),
+];
+for (const target of targets) {
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, ico);
+  console.log("Wrote " + target + " (" + ico.length + " bytes)");
+}

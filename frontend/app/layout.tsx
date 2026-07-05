@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Sora } from "next/font/google";
 import "./globals.css";
 import AuthInterceptor from "@/components/AuthInterceptor";
+import WindowControls from "@/components/WindowControls";
 import { GlobalAudioProvider } from "@/components/GlobalAudioProvider";
 import { GlobalRecordingProvider } from "@/components/GlobalRecordingProvider";
 
@@ -35,7 +36,9 @@ export default function RootLayout({
         <GlobalAudioProvider>
           <GlobalRecordingProvider>
             <div className="flex h-dvh w-screen flex-col overflow-hidden">
-              <div className="app-drag h-10 shrink-0 select-none bg-[#EBF2FA]" />
+              <div className="app-drag flex h-10 shrink-0 select-none items-center justify-end bg-[#E8F7F6]">
+                <WindowControls />
+              </div>
               <div className="relative min-h-0 w-full flex-1 overflow-hidden">
                 <AuthInterceptor />
                 {children}

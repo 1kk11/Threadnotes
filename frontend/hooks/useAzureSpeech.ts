@@ -72,8 +72,6 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
     return localStorage.getItem("token");
   }, [initialProps]);
 
-  const DIARIZE_URL = `${API_URL}/diarize/stream`;
-
   const fetchAzureToken = useCallback(async (): Promise<{
     token: string;
     region: string;
@@ -120,10 +118,12 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
         "Continuous",
       );
 
+      // English only: US English + Indian English. No Hindi/other languages —
+      // everything is transcribed as English.
       const autoDetectSourceLanguageConfig =
         SpeechSDK.AutoDetectSourceLanguageConfig.fromLanguages([
           "en-US",
-          "hi-IN",
+          "en-IN",
         ]);
 
       const audioConfig = SpeechSDK.AudioConfig.fromStreamInput(
@@ -151,11 +151,14 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
             ) || "";
         }
         if (!lang) return;
-        seenLangsRef.current.add(lang.toLowerCase().startsWith("hi") ? "hi" : "en");
-        const hasHi = seenLangsRef.current.has("hi");
-        const hasEn = seenLangsRef.current.has("en");
+        // English-only now: show the variant (US / Indian), default English.
+        const l = lang.toLowerCase();
         setDetectedLanguage(
-          hasHi && hasEn ? "Hinglish" : hasHi ? "Hindi" : "English",
+          l.startsWith("en-in")
+            ? "Indian English"
+            : l.startsWith("en-us")
+              ? "US English"
+              : "English",
         );
       };
 
@@ -513,7 +516,10 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
     analyserRef.current = null;
   }, []);
 
-  const finishAndUpload = useCallback(async (): Promise<any> => {
+  // Stop the recognizer + recorder, write the recording to disk and remux it to
+  // a playable URL. Does NOT diarize — diarization is now triggered on demand
+  // (via diarizeAudioFile on the returned audioFilePath).
+  const finishRecording = useCallback(async (): Promise<any> => {
     finishingRef.current = true;
     if (renewTimerRef.current) {
       clearInterval(renewTimerRef.current);
@@ -608,87 +614,22 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
       }
     }
 
-    let mergedTranscript: any[] = [];
-
-    if (
-      audioFilePath &&
-      typeof window !== "undefined" &&
-      window.electronAPI?.audioCompressAndRead
-    ) {
-      const jwt = readJwt();
-      const { chunks, segmentSeconds, mimeType } =
-        await window.electronAPI.audioCompressAndRead(audioFilePath);
-
-      const abort = new AbortController();
-      diarizeAbortRef.current = abort;
-
-      callbacksRef.current.onProgress?.(0, chunks.length);
-
-      const stitched: any[] = [];
-      for (let i = 0; i < chunks.length; i++) {
-        const { buffer, name } = chunks[i];
-        callbacksRef.current.onPartial?.(
-          chunks.length > 1
-            ? `Diarizing part ${i + 1} of ${chunks.length}...`
-            : "Diarizing transcript...",
-        );
-
-        const form = new FormData();
-        form.append("file", new Blob([buffer], { type: mimeType }), name);
-
-        const response = await fetch(DIARIZE_URL, {
-          method: "POST",
-          headers: jwt ? { Authorization: `Bearer ${jwt}` } : undefined,
-          body: form,
-          signal: abort.signal,
-        });
-
-        const result = await response.json();
-        if (!response.ok || result.status === "error") {
-          throw new Error(
-            result.detail || result.message ||
-              `Vault diarization failed on part ${i + 1}: ${response.status}`,
-          );
-        }
-
-        const offset = i * segmentSeconds;
-        const segs = Array.isArray(result.merged_transcript)
-          ? result.merged_transcript
-          : Array.isArray(result.segments)
-            ? result.segments
-            : [];
-        for (const s of segs) {
-          stitched.push({
-            ...s,
-            start: (Number(s.start) || 0) + offset,
-            end: (Number(s.end) || 0) + offset,
-            words: Array.isArray(s.words)
-              ? s.words.map((w: any) => ({
-                  ...w,
-                  start: (Number(w.start) || 0) + offset,
-                  end: (Number(w.end) || 0) + offset,
-                }))
-              : s.words,
-          });
-        }
-
-        callbacksRef.current.onProgress?.(i + 1, chunks.length);
-      }
-
-      diarizeAbortRef.current = null;
-      mergedTranscript = stitched;
-    }
-
     cleanupStreams();
     mediaRecorderRef.current = null;
-    audioFilePathRef.current = null;
+    // Keep audioFilePathRef so diarization can run later on the same finalized
+    // audio. It's reset on the next start()/cancel().
 
     return {
       status: "success",
       audioUrl: playbackUrl,
-      merged_transcript: mergedTranscript,
+      audioFilePath,
     };
-  }, [cleanupStreams, readJwt, DIARIZE_URL]);
+  }, [cleanupStreams]);
+
+  const getRecordingFilePath = useCallback(
+    () => audioFilePathRef.current,
+    [],
+  );
 
   const cancel = useCallback(() => {
     finishingRef.current = true;
@@ -732,7 +673,8 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
     start,
     pause,
     resume,
-    finishAndUpload,
+    finishRecording,
+    getRecordingFilePath,
     cancel,
     micLabel,
     detectedLanguage,

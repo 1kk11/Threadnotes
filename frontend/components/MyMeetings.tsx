@@ -2,13 +2,18 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import Calendar from "react-calendar";
 import "react-calendar/dist/Calendar.css";
-import { Download, CalendarDays } from "lucide-react";
+import { Download, CalendarDays, Clock, Highlighter } from "lucide-react";
+import HighlightedText, {
+  highlightRanges,
+} from "@/components/ui/HighlightedText";
 import {
   loadMeetings,
   saveMeetings,
   updateMeeting,
   MEETINGS_EVENT,
 } from "@/lib/meetingStore";
+import { diarizeAudioFile } from "@/lib/diarize";
+import AudioPlayer from "@/components/ui/AudioPlayer";
 
 type TranscriptEntry = { speaker: string; text: string; timestamp: string };
 type Meeting = {
@@ -17,7 +22,54 @@ type Meeting = {
   date: string;
   transcript: TranscriptEntry[];
   filePath?: string;
+  durationSec?: number;
+  plainText?: string;
+  diarized?: DiarizedRow[];
+  audioPath?: string;
+  audioMediaUrl?: string;
+  highlights?: string[];
+  highlightsShown?: boolean;
 };
+
+type DiarizedRow = {
+  speaker: string;
+  text: string;
+  start?: number;
+  end?: number;
+  words?: { word: string; start: number; end: number }[];
+};
+
+// Brand palette only: Teal, Ocean Blue, Navy, Optima Aqua. Each speaker's
+// label text and left border share the same colour.
+const SPEAKER_HEX = [
+  "#2FB5AA", // Teal
+  "#2E6DBE", // Ocean Blue
+  "#1F2540", // Navy
+  "#3B96A9", // Optima Aqua
+];
+
+// Diarized rows for display: prefer the stored diarized array; fall back to the
+// legacy `transcript` for meetings saved before Phase 2 (which stored the
+// diarized entries there). Null => diarization not available yet.
+function getDiarizedRows(m: Meeting): DiarizedRow[] | null {
+  if (m.diarized && m.diarized.length > 0) return m.diarized;
+  if (!m.plainText && m.transcript.length > 0) return m.transcript;
+  return null;
+}
+
+function getPlainText(m: Meeting): string {
+  if (m.plainText) return m.plainText;
+  return m.transcript.map((t) => t.text).join("\n\n");
+}
+
+function formatDuration(totalSeconds: number): string {
+  const s = Math.max(0, Math.round(totalSeconds));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return h > 0 ? `${h}:${pad(m)}:${pad(sec)}` : `${m}:${pad(sec)}`;
+}
 
 function useDebounce<T>(value: T, delay: number): T {
   const [debouncedValue, setDebouncedValue] = useState<T>(value);
@@ -42,8 +94,65 @@ export default function MyMeetings() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
 
+  // Detail-modal Transcript/Diarize toggle + on-demand re-diarization.
+  const [detailView, setDetailView] = useState<"transcript" | "diarize">(
+    "diarize",
+  );
+  const [showDiarizeConfirm, setShowDiarizeConfirm] = useState(false);
+  const [diarizing, setDiarizing] = useState(false);
+  const [diarizeProgress, setDiarizeProgress] = useState(0);
+  const [showDiarizeRetry, setShowDiarizeRetry] = useState(false);
+
+  const [mtgHighlights, setMtgHighlights] = useState<string[]>([]);
+  const [mtgShowHighlights, setMtgShowHighlights] = useState(true);
+  const [mtgHighlightsOnly, setMtgHighlightsOnly] = useState(false);
+  const [mtgAudioTime, setMtgAudioTime] = useState(0);
+  const [mtgHlButton, setMtgHlButton] = useState<{
+    x: number;
+    y: number;
+    text: string;
+  } | null>(null);
+
+  const [editingMtgSpeakerIdx, setEditingMtgSpeakerIdx] = useState<number | null>(
+    null,
+  );
+  const [mtgSpeakerDraft, setMtgSpeakerDraft] = useState("");
+
   const searchInputRef = useRef<HTMLInputElement>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mtgScrollRef = useRef<HTMLDivElement>(null);
+
+  // Rename a speaker everywhere in this meeting and persist it.
+  const commitMtgSpeakerRename = (origSpeaker: string) => {
+    const name = mtgSpeakerDraft.trim();
+    setEditingMtgSpeakerIdx(null);
+    if (!name || name === origSpeaker || !selectedMeeting) return;
+    const current = getDiarizedRows(selectedMeeting);
+    if (!current) return;
+    const updatedDiarized = current.map((r) =>
+      r.speaker === origSpeaker ? { ...r, speaker: name } : r,
+    );
+    updateMeeting(selectedMeeting.id, { diarized: updatedDiarized });
+    const updated = { ...selectedMeeting, diarized: updatedDiarized };
+    setSelectedMeeting(updated);
+    setMeetings((prev) =>
+      prev.map((m) => (m.id === selectedMeeting.id ? updated : m)),
+    );
+  };
+
+  // As the audio plays (or after seeking), keep the currently-spoken word in
+  // view — scroll only when it drifts near/beyond the visible edges.
+  useEffect(() => {
+    const c = mtgScrollRef.current;
+    if (!c) return;
+    const el = c.querySelector<HTMLElement>("[data-active-word]");
+    if (!el) return;
+    const cRect = c.getBoundingClientRect();
+    const eRect = el.getBoundingClientRect();
+    if (eRect.top < cRect.top + 48 || eRect.bottom > cRect.bottom - 48) {
+      el.scrollIntoView({ block: "center", behavior: "smooth" });
+    }
+  }, [mtgAudioTime]);
 
   const showToast = (message: string) => {
     setToast(message);
@@ -74,18 +183,42 @@ export default function MyMeetings() {
     }
   };
 
-  const handleExport = (meeting: Meeting) => {
-    const formattedDate = new Date(meeting.date).toLocaleString();
-    const body = meeting.transcript
-      .map((t) => `${t.speaker}: ${t.text}`)
-      .join("\n\n");
-    const exportText = `${meeting.topic}\n${formattedDate}\n\n${body}`;
+  const handleExport = async (meeting: Meeting) => {
+    // Save whichever view is open (diarized rows vs plain transcript); the user
+    // picks the format (.txt / .csv / .doc / .pdf) in the save dialog.
+    const view = detailView === "transcript" ? "transcript" : "diarize";
+    const rows = getDiarizedRows(meeting) ?? [];
+    const exportRows = rows.map((r) => ({ speaker: r.speaker, text: r.text }));
+    const plainText = getPlainText(meeting);
+    const base = meeting.topic.replace(/[^a-z0-9]/gi, "_") || "Transcript";
+    const kind = view === "diarize" ? "Diarized" : "Transcript";
+    const defaultName = `${base}_${kind}.txt`;
 
+    const api = typeof window !== "undefined" ? window.electronAPI : undefined;
+    if (api?.exportTranscript) {
+      const res = await api.exportTranscript({
+        plainText,
+        diarized: exportRows,
+        view,
+        title: meeting.topic,
+        defaultName,
+      });
+      if (res.saved) showToast("Transcript saved.");
+      return;
+    }
+
+    // Browser fallback (txt only).
+    const formattedDate = new Date(meeting.date).toLocaleString();
+    const body =
+      view === "diarize" && exportRows.length
+        ? exportRows.map((t) => `${t.speaker}: ${t.text}`).join("\n\n")
+        : plainText;
+    const exportText = `${meeting.topic}\n${formattedDate}\n\n${body}`;
     const blob = new Blob([exportText], { type: "text/plain" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `${meeting.topic.replace(/[^a-z0-9]/gi, "_")}_Transcript.txt`;
+    a.download = `${base}_Transcript.txt`;
     a.click();
     URL.revokeObjectURL(url);
     showToast("Exporting transcript...");
@@ -183,12 +316,144 @@ export default function MyMeetings() {
     return dateSet;
   }, [meetings]);
 
+  const statsByDate = useMemo(() => {
+    const map = new Map<string, { count: number; totalSec: number }>();
+    meetings.forEach((meeting) => {
+      const d = new Date(meeting.date);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      const entry = map.get(key) || { count: 0, totalSec: 0 };
+      entry.count += 1;
+      entry.totalSec += Number(meeting.durationSec) || 0;
+      map.set(key, entry);
+    });
+    return map;
+  }, [meetings]);
+
   const confirmDelete = () => {
     if (!meetingToDelete) return;
     const updated = meetings.filter((m) => m.id !== meetingToDelete);
     setMeetings(updated);
     saveMeetings(updated);
     setMeetingToDelete(null);
+  };
+
+  const openMeeting = (meeting: Meeting) => {
+    setSelectedMeeting(meeting);
+    setDetailView(getDiarizedRows(meeting) ? "diarize" : "transcript");
+    setShowDiarizeConfirm(false);
+    setShowDiarizeRetry(false);
+    setDiarizing(false);
+    setDiarizeProgress(0);
+    setMtgHighlights(meeting.highlights ?? []);
+    setMtgShowHighlights(meeting.highlightsShown ?? true);
+    setMtgHighlightsOnly(false);
+    setMtgHlButton(null);
+    setMtgAudioTime(0);
+  };
+
+  const persistHighlights = (
+    meeting: Meeting,
+    next: string[],
+    shown: boolean,
+  ) => {
+    updateMeeting(meeting.id, {
+      highlights: next.length ? next : undefined,
+      highlightsShown: shown,
+    });
+    const updated = { ...meeting, highlights: next, highlightsShown: shown };
+    setMeetings((prev) => prev.map((m) => (m.id === meeting.id ? updated : m)));
+    setSelectedMeeting(updated);
+  };
+
+  const handleMtgMouseUp = () => {
+    // Highlighting is a diarize-only feature.
+    if (detailView !== "diarize") {
+      setMtgHlButton(null);
+      return;
+    }
+    const sel = typeof window !== "undefined" ? window.getSelection() : null;
+    const text = sel?.toString().trim() ?? "";
+    if (!sel || sel.rangeCount === 0 || text.length < 2) {
+      setMtgHlButton(null);
+      return;
+    }
+    const rect = sel.getRangeAt(0).getBoundingClientRect();
+    setMtgHlButton({ x: rect.left + rect.width / 2, y: rect.top, text });
+  };
+
+  const mtgIsHighlighted = (text: string) =>
+    mtgHighlights.some(
+      (h) => h === text || h.includes(text) || text.includes(h),
+    );
+
+  const addMtgHighlight = () => {
+    if (!mtgHlButton || !selectedMeeting) return;
+    const text = mtgHlButton.text;
+    const already = mtgIsHighlighted(text);
+    const next = already
+      ? mtgHighlights.filter(
+          (h) => !(h === text || h.includes(text) || text.includes(h)),
+        )
+      : [...mtgHighlights, text];
+    setMtgHighlights(next);
+    setMtgHlButton(null);
+    window.getSelection?.()?.removeAllRanges();
+    persistHighlights(selectedMeeting, next, true);
+  };
+
+  const runReDiarize = async (meeting: Meeting) => {
+    if (!meeting.audioPath) {
+      showToast("Original audio not available for this meeting.");
+      return;
+    }
+    setShowDiarizeConfirm(false);
+    setShowDiarizeRetry(false);
+    setDiarizing(true);
+    setDiarizeProgress(2);
+    let timer: ReturnType<typeof setInterval> | null = setInterval(() => {
+      setDiarizeProgress((p) => (p < 90 ? p + 2 : p));
+    }, 400);
+    try {
+      const rows = await diarizeAudioFile(meeting.audioPath, {
+        jwt: localStorage.getItem("token"),
+        onProgress: (done, total) => {
+          if (total > 0) {
+            setDiarizeProgress((p) =>
+              Math.max(p, Math.min(96, (done / total) * 100)),
+            );
+          }
+        },
+      });
+      const diarized = rows.map((r) => ({
+        speaker: r.speaker,
+        text: r.text,
+        start: r.start,
+        end: r.end,
+        words: r.words,
+      }));
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+      }
+      setDiarizeProgress(100);
+      updateMeeting(meeting.id, { diarized });
+      const updated = { ...meeting, diarized };
+      setMeetings((prev) =>
+        prev.map((m) => (m.id === meeting.id ? updated : m)),
+      );
+      setSelectedMeeting(updated);
+      setDiarizing(false);
+      setDetailView("diarize");
+      showToast("Diarization complete");
+    } catch {
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+      }
+      setDiarizing(false);
+      setDiarizeProgress(0);
+      setShowDiarizeRetry(true);
+    }
   };
 
   const calendarPanel = (
@@ -214,23 +479,36 @@ export default function MyMeetings() {
         }}
         value={selectedDate ? new Date(selectedDate) : null}
         tileContent={({ date, view }) => {
-          if (view === "month") {
-            const dateStr = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-            if (datesWithMeetings.has(dateStr)) {
-              return (
+          if (view !== "month") return null;
+          const dateStr = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+          const stats = statsByDate.get(dateStr) || { count: 0, totalSec: 0 };
+          return (
+            <>
+              {stats.count > 0 && (
                 <div className="flex justify-center mt-1">
                   <span className="w-1.5 h-1.5 bg-[#e91e63] rounded-full"></span>
                 </div>
-              );
-            }
-          }
-          return null;
+              )}
+              <span
+                role="tooltip"
+                className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 hidden w-max -translate-x-1/2 rounded-lg bg-slate-900 px-2.5 py-1.5 text-center text-[11px] font-semibold leading-tight text-white shadow-xl group-hover:block"
+              >
+                {stats.count} {stats.count === 1 ? "meeting" : "meetings"}
+                <span className="mt-0.5 block font-normal text-slate-300">
+                  {formatDuration(stats.totalSec)}
+                </span>
+                <span className="absolute left-1/2 top-full h-2 w-2 -translate-x-1/2 -translate-y-1/2 rotate-45 bg-slate-900" />
+              </span>
+            </>
+          );
         }}
         tileClassName={({ date, view }) => {
           if (view === "month") {
             const dateStr = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+            const base = "group relative overflow-visible";
             if (selectedDate === dateStr)
-              return "bg-indigo-50 !rounded-lg text-indigo-700 font-bold border border-indigo-200";
+              return `${base} bg-indigo-50 !rounded-lg text-indigo-700 font-bold border border-indigo-200`;
+            return base;
           }
           return null;
         }}
@@ -359,7 +637,7 @@ export default function MyMeetings() {
 
                     <div className="flex items-center gap-2 w-full md:w-auto shrink-0 flex-wrap sm:flex-nowrap">
                       <button
-                        onClick={() => setSelectedMeeting(meeting)}
+                        onClick={() => openMeeting(meeting)}
                         className="flex-1 sm:flex-none text-xs font-bold text-indigo-600 bg-indigo-50 border border-indigo-100 px-4 py-2 rounded-lg hover:bg-indigo-600 hover:text-white transition-all shadow-sm whitespace-nowrap"
                       >
                         View Transcript
@@ -475,7 +753,31 @@ export default function MyMeetings() {
               <h2 className="text-xl font-bold text-white">
                 {selectedMeeting.topic}
               </h2>
-              <div className="flex items-center gap-1">
+              <div className="flex items-center gap-2">
+                {typeof selectedMeeting.durationSec === "number" &&
+                  selectedMeeting.durationSec > 0 && (
+                    <span
+                      className="flex items-center gap-1.5 rounded-full bg-white/20 px-3 py-1.5 text-xs font-bold text-white ring-1 ring-white/30"
+                      title="Total meeting duration"
+                    >
+                      <Clock className="h-3.5 w-3.5" />
+                      {formatDuration(selectedMeeting.durationSec)}
+                    </span>
+                  )}
+                {detailView === "diarize" && (
+                  <button
+                    onClick={() => setMtgHighlightsOnly((v) => !v)}
+                    className={`p-2 rounded-full transition-colors ${
+                      mtgHighlightsOnly
+                        ? "bg-white/25 text-white"
+                        : "text-white/80 hover:bg-white/20 hover:text-white"
+                    }`}
+                    title={mtgHighlightsOnly ? "Show all" : "Only highlights"}
+                    aria-label="Toggle highlights view"
+                  >
+                    <Highlighter className="w-5 h-5" />
+                  </button>
+                )}
                 <button
                   onClick={() => handleExport(selectedMeeting)}
                   className="p-2 text-white/80 hover:bg-white/20 hover:text-white rounded-full transition-colors"
@@ -506,23 +808,283 @@ export default function MyMeetings() {
                 </button>
               </div>
             </div>
-            <div className="p-6 overflow-y-auto space-y-4 text-[15px] text-slate-700 custom-scrollbar">
-              {selectedMeeting.transcript.map((t, idx) => (
-                <div
-                  key={idx}
-                  className="bg-white p-4 rounded-xl border border-slate-100 shadow-sm"
-                >
-                  <p>
-                    <span className="font-bold text-slate-900 mr-2">
-                      {t.speaker}:
-                    </span>{" "}
-                    {t.text}
-                  </p>
+            <div className="flex shrink-0 items-center gap-3 border-b border-slate-100 px-6 py-3">
+              {selectedMeeting.audioMediaUrl && (
+                <div className="min-w-0 flex-1">
+                  <AudioPlayer
+                    src={selectedMeeting.audioMediaUrl}
+                    onTimeUpdate={setMtgAudioTime}
+                  />
                 </div>
-              ))}
+              )}
+              <button
+                onClick={() => {
+                  if (diarizing) return;
+                  if (detailView === "diarize") {
+                    setDetailView("transcript");
+                  } else if (getDiarizedRows(selectedMeeting)) {
+                    setDetailView("diarize");
+                  } else {
+                    setShowDiarizeConfirm(true);
+                  }
+                }}
+                disabled={diarizing}
+                className={`relative shrink-0 overflow-hidden rounded-full px-5 py-1.5 text-sm font-semibold text-slate-800 shadow-sm transition-colors ${
+                  diarizing
+                    ? "bg-slate-200"
+                    : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                } ${selectedMeeting.audioMediaUrl ? "" : "ml-auto"}`}
+              >
+                {/* while diarizing, the button itself fills with progress */}
+                {diarizing && (
+                  <span
+                    className="absolute inset-y-0 left-0 bg-linear-to-r from-[#2FB5AA] to-[#2E6DBE] transition-[width] duration-200"
+                    style={{ width: `${diarizeProgress}%` }}
+                  />
+                )}
+                <span className="relative">
+                  {diarizing
+                    ? `Diarizing… ${Math.round(diarizeProgress)}%`
+                    : detailView === "diarize"
+                      ? "Diarize"
+                      : "Transcript"}
+                </span>
+              </button>
+            </div>
+
+            <div
+              ref={mtgScrollRef}
+              onMouseUp={handleMtgMouseUp}
+              onScroll={() => setMtgHlButton(null)}
+              className="p-6 overflow-y-auto space-y-4 text-[15px] text-slate-700 custom-scrollbar"
+            >
+              {mtgHighlightsOnly && mtgHighlights.length === 0 ? (
+                <p className="text-sm text-slate-400">
+                  No highlights yet — select text and click Highlight.
+                </p>
+              ) : !mtgHighlightsOnly && detailView === "transcript" ? (
+                <div className="whitespace-pre-wrap leading-relaxed">
+                  {/* Mirror the diarize-view highlights here too. */}
+                  <HighlightedText
+                    text={getPlainText(selectedMeeting)}
+                    phrases={mtgHighlights}
+                    enabled={mtgShowHighlights}
+                  />
+                </div>
+              ) : (
+                (() => {
+                  const allRows = getDiarizedRows(selectedMeeting);
+                  if (!allRows) {
+                    return (
+                      <div className="flex flex-col items-center justify-center gap-3 py-16 text-center">
+                        <p className="text-sm text-slate-500">
+                          This meeting hasn&apos;t been diarized yet.
+                        </p>
+                        <button
+                          onClick={() => setShowDiarizeConfirm(true)}
+                          className="rounded-lg bg-linear-to-r from-violet-500 to-blue-500 px-5 py-2 text-sm font-bold text-white shadow-sm"
+                        >
+                          Diarize now
+                        </button>
+                      </div>
+                    );
+                  }
+                  // Assign speaker colours from the full transcript so they stay
+                  // consistent, then (in highlights-only mode) show just the full
+                  // boxes that contain a highlight.
+                  const order: string[] = [];
+                  allRows.forEach((r) => {
+                    if (!order.includes(r.speaker)) order.push(r.speaker);
+                  });
+                  const rows = mtgHighlightsOnly
+                    ? allRows.filter((r) => {
+                        const rt = r.words?.length
+                          ? r.words.map((w) => w.word).join(" ")
+                          : r.text;
+                        return highlightRanges(rt, mtgHighlights).length > 0;
+                      })
+                    : allRows;
+                  return rows.map((t, idx) => {
+                    if (!order.includes(t.speaker)) order.push(t.speaker);
+                    const color =
+                      SPEAKER_HEX[
+                        order.indexOf(t.speaker) % SPEAKER_HEX.length
+                      ];
+                    const words = t.words ?? [];
+                    const rowText = words.map((w) => w.word).join(" ");
+                    const hlRanges =
+                      mtgShowHighlights && mtgHighlights.length && words.length
+                        ? highlightRanges(rowText, mtgHighlights)
+                        : [];
+                    const wordStarts: number[] = [];
+                    let acc = 0;
+                    for (const w of words) {
+                      wordStarts.push(acc);
+                      acc += w.word.length + 1;
+                    }
+                    return (
+                      <div
+                        key={idx}
+                        className="rounded-xl border border-l-4 border-slate-100 bg-white p-4 shadow-sm"
+                        style={{ borderLeftColor: color }}
+                      >
+                        {editingMtgSpeakerIdx === idx ? (
+                          <input
+                            autoFocus
+                            value={mtgSpeakerDraft}
+                            onChange={(e) => setMtgSpeakerDraft(e.target.value)}
+                            onBlur={() => commitMtgSpeakerRename(t.speaker)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter")
+                                commitMtgSpeakerRename(t.speaker);
+                              if (e.key === "Escape")
+                                setEditingMtgSpeakerIdx(null);
+                            }}
+                            className="mb-1 w-36 rounded border border-slate-300 bg-white px-2 py-0.5 text-sm font-bold outline-none focus:ring-2 focus:ring-violet-500/40"
+                            style={{ color }}
+                          />
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingMtgSpeakerIdx(idx);
+                              setMtgSpeakerDraft(t.speaker);
+                            }}
+                            title="Click to rename this speaker everywhere"
+                            className="mb-1 block text-sm font-bold hover:underline"
+                            style={{ color }}
+                          >
+                            {t.speaker}
+                          </button>
+                        )}
+                        <p className="leading-relaxed text-slate-700">
+                          {words.length > 0 ? (
+                            words.map((w, wi) => {
+                              const isActive =
+                                mtgAudioTime >= w.start &&
+                                mtgAudioTime < w.end;
+                              const wStart = wordStarts[wi];
+                              const wEnd = wStart + w.word.length;
+                              const isHl = hlRanges.some(
+                                ([s, e]) => wStart < e && wEnd > s,
+                              );
+                              return (
+                                <span
+                                  key={wi}
+                                  data-active-word={isActive ? "" : undefined}
+                                  className={
+                                    isActive
+                                      ? "rounded-md bg-indigo-100 px-1 py-0.5 font-bold text-indigo-700 ring-1 ring-indigo-200 transition-all duration-150"
+                                      : isHl
+                                        ? "rounded bg-amber-200/70 px-0.5 transition-all duration-150"
+                                        : "transition-all duration-150"
+                                  }
+                                >
+                                  {w.word}{" "}
+                                </span>
+                              );
+                            })
+                          ) : (
+                            <HighlightedText
+                              text={t.text}
+                              phrases={mtgHighlights}
+                              enabled={mtgShowHighlights}
+                            />
+                          )}
+                        </p>
+                      </div>
+                    );
+                  });
+                })()
+              )}
             </div>
           </div>
         </div>
+      )}
+
+      {showDiarizeConfirm && selectedMeeting && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-sm rounded-3xl border border-slate-100 bg-white p-7 shadow-2xl">
+            <h3 className="text-xl font-bold text-slate-900">
+              Diarize this meeting?
+            </h3>
+            {selectedMeeting.audioPath ? (
+              <>
+                <p className="mt-2 text-sm text-slate-500">
+                  We&apos;ll separate the speakers using the original audio. This
+                  can take a little while.
+                </p>
+                <div className="mt-7 flex gap-3">
+                  <button
+                    onClick={() => setShowDiarizeConfirm(false)}
+                    className="flex-1 rounded-xl bg-slate-100 py-3 text-sm font-bold text-slate-700 transition-colors hover:bg-slate-200"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => runReDiarize(selectedMeeting)}
+                    className="flex-1 rounded-xl bg-linear-to-r from-violet-500 to-blue-500 py-3 text-sm font-bold text-white shadow-lg shadow-violet-500/25 transition-all hover:from-violet-600 hover:to-blue-600"
+                  >
+                    Diarize
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <p className="mt-2 text-sm text-slate-500">
+                  The original audio for this meeting isn&apos;t available, so it
+                  can&apos;t be diarized now.
+                </p>
+                <div className="mt-7">
+                  <button
+                    onClick={() => setShowDiarizeConfirm(false)}
+                    className="w-full rounded-xl bg-slate-100 py-3 text-sm font-bold text-slate-700 transition-colors hover:bg-slate-200"
+                  >
+                    Close
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {showDiarizeRetry && selectedMeeting && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-sm rounded-3xl border border-slate-100 bg-white p-7 shadow-2xl">
+            <h3 className="text-xl font-bold text-slate-900">
+              Diarization failed
+            </h3>
+            <p className="mt-2 text-sm text-slate-500">
+              We couldn&apos;t diarize this meeting. You can retry.
+            </p>
+            <div className="mt-7 flex gap-3">
+              <button
+                onClick={() => setShowDiarizeRetry(false)}
+                className="flex-1 rounded-xl bg-slate-100 py-3 text-sm font-bold text-slate-700 transition-colors hover:bg-slate-200"
+              >
+                Not now
+              </button>
+              <button
+                onClick={() => runReDiarize(selectedMeeting)}
+                className="flex-1 rounded-xl bg-linear-to-r from-violet-500 to-blue-500 py-3 text-sm font-bold text-white shadow-lg shadow-violet-500/25 transition-all hover:from-violet-600 hover:to-blue-600"
+              >
+                Retry
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {mtgHlButton && (
+        <button
+          onClick={addMtgHighlight}
+          style={{ left: mtgHlButton.x, top: mtgHlButton.y - 44 }}
+          className="fixed z-200 flex -translate-x-1/2 items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white shadow-xl"
+        >
+          <Highlighter className="h-3.5 w-3.5" />
+          {mtgIsHighlighted(mtgHlButton.text) ? "Unhighlight" : "Highlight"}
+        </button>
       )}
 
       {toast && (

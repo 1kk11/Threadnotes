@@ -11,8 +11,8 @@
         "electron": "electron .",
         "electron:dev": "concurrently -k \"next dev\" \"wait-on tcp:3000 && electron .\"",
         "generate-icon": "node scripts/generate-icon.js",
-        "dist": "next build && electron-builder",
-        "dist:win": "next build && electron-builder --win"
+        "dist": "node scripts/gen-build-id.js && next build && electron-builder",
+        "dist:win": "node scripts/gen-build-id.js && next build && electron-builder --win"
     },
     "dependencies": {
         "@types/react-calendar": "^3.9.0",

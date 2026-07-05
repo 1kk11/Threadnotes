@@ -47,7 +47,7 @@ export default function Sidebar({
         <img
           src="/app-icon.ico"
           alt="ThreadNotes"
-          className="h-9 w-9 rounded-xl shadow-md shadow-violet-500/30"
+          className="h-9 w-9 rounded-xl shadow-md shadow-[#2FB5AA]/30"
         />
         <span className="text-lg font-bold tracking-tight text-slate-900">
           ThreadNotes
