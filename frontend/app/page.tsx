@@ -8,28 +8,20 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 function SplashScreen() {
   return (
-    <div className="flex h-full w-full flex-col items-center justify-center gap-7 bg-slate-50">
-      <div className="relative flex h-20 w-20 items-center justify-center">
-        <span className="absolute inset-0 animate-ping rounded-2xl bg-[#2FB5AA]/25" />
-        <span className="absolute inset-0 rounded-2xl bg-[#2FB5AA]/10 blur-xl" />
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src="/app-icon.ico"
-          alt="ThreadNotes"
-          className="relative h-16 w-16 rounded-2xl shadow-lg shadow-[#2FB5AA]/30"
-        />
-      </div>
+    <div className="relative flex h-full w-full items-center justify-center overflow-hidden bg-slate-50">
+      {/* Full-screen branding cover (public/cover.jpeg). */}
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src="/cover.jpeg"
+        alt="ThreadNotes"
+        className="absolute inset-0 h-full w-full object-cover"
+      />
 
-      <div className="flex flex-col items-center gap-4">
-        <h1 className="bg-linear-to-r from-violet-600 to-blue-600 bg-clip-text text-2xl font-black tracking-tight text-transparent">
-          ThreadNotes
-        </h1>
-
-        <div className="relative h-1 w-44 overflow-hidden rounded-full bg-slate-200">
-          <div className="absolute inset-y-0 left-0 w-1/3 animate-[loadbar_1.1s_ease-in-out_infinite] rounded-full bg-linear-to-r from-violet-500 to-blue-500" />
+      <div className="absolute bottom-10 left-1/2 flex -translate-x-1/2 flex-col items-center gap-3">
+        <div className="relative h-1 w-44 overflow-hidden rounded-full bg-white/60 shadow-sm">
+          <div className="absolute inset-y-0 left-0 w-1/3 animate-[loadbar_1.1s_ease-in-out_infinite] rounded-full bg-linear-to-r from-[#2FB5AA] to-[#2E6DBE]" />
         </div>
-
-        <p className="animate-pulse text-xs font-medium tracking-wide text-slate-400">
+        <p className="animate-pulse text-xs font-semibold tracking-wide text-slate-500">
           Starting up…
         </p>
       </div>
