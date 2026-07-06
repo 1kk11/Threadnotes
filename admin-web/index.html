@@ -146,8 +146,9 @@
     <div id="toast" class="pointer-events-none fixed bottom-6 left-1/2 z-[60] hidden -translate-x-1/2 rounded-xl bg-navy px-4 py-2.5 text-sm font-semibold text-white shadow-xl"></div>
 
     <script>
-      // ── Point this at your deployed Cloud Vault backend (Render). ──
-      const API_BASE = "https://threadnotes-cloud-vault.onrender.com";
+      // Calls go to /api/* (relative). Vercel rewrites /api/* to the backend
+      // (see vercel.json), so there is NO backend URL in this page and no CORS.
+      const API_BASE = "/api";
 
       const $ = (id) => document.getElementById(id);
       const TOKEN_KEY = "tn_admin_token";
