@@ -23,7 +23,6 @@ contextBridge.exposeInMainWorld("electronAPI", {
     windowMaximizeToggle: () => ipcRenderer.send("window-maximize-toggle"),
     windowClose: () => ipcRenderer.send("window-close"),
 
-    // Floating recorder widget bridge.
     recorderSetActive: (active) =>
         ipcRenderer.send("recorder:set-active", active),
     recorderSetState: (state) => ipcRenderer.send("recorder:set-state", state),

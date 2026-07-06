@@ -23,10 +23,6 @@ function fmt(total: number): string {
 
 const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
 
-// Custom audio player: skip ±15s, round teal play/pause, a progress line with
-// time labels, a speed menu (0.5x–2x) and a volume slider — both popping up
-// above their trigger. Optionally shares its <audio> element via `audioRef`
-// (used for transcript karaoke sync) and reports time via onTimeUpdate.
 export default function AudioPlayer({
   src,
   audioRef,
@@ -50,7 +46,6 @@ export default function AudioPlayer({
   const speedWrapRef = useRef<HTMLDivElement | null>(null);
   const volumeWrapRef = useRef<HTMLDivElement | null>(null);
 
-  // Keep the element's rate / volume in sync with state.
   useEffect(() => {
     const el = ref.current;
     if (el) el.playbackRate = rate;
@@ -64,7 +59,6 @@ export default function AudioPlayer({
     }
   }, [volume, muted, ref, src]);
 
-  // Close popups on outside click.
   useEffect(() => {
     if (!showSpeed && !showVolume) return;
     const onDown = (e: MouseEvent) => {
@@ -99,7 +93,6 @@ export default function AudioPlayer({
     el.currentTime = next;
   };
 
-  // Keyboard shortcuts: → +5s, ← −5s (ignored while typing in a field).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const el = ref.current;
@@ -128,8 +121,6 @@ export default function AudioPlayer({
   };
 
   const download = async () => {
-    // media:// is a custom Electron scheme — the <a download> trick navigates
-    // the window instead of saving, so route it through a native save dialog.
     const api = (
       window as unknown as {
         electronAPI?: {
@@ -144,8 +135,6 @@ export default function AudioPlayer({
       await api.saveAudio(src, "recording.ogg");
       return;
     }
-    // blob: / http(s): — fetch to a blob and download that (anchor href is a
-    // blob URL, which triggers a real download rather than navigation).
     try {
       const res = await fetch(src);
       const blob = await res.blob();
@@ -157,9 +146,7 @@ export default function AudioPlayer({
       a.click();
       a.remove();
       setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
-    } catch {
-      /* ignore */
-    }
+    } catch {}
   };
 
   const pct = duration ? (current / duration) * 100 : 0;
@@ -171,7 +158,6 @@ export default function AudioPlayer({
 
   return (
     <div className="flex items-center gap-2.5 rounded-xl border border-white/60 bg-white/70 px-3 py-2.5 shadow-sm sm:gap-3">
-      {/* Transport: back 15s · play/pause · forward 15s (tight group) */}
       <div className="flex shrink-0 items-center gap-1">
         <button
           type="button"
@@ -209,7 +195,6 @@ export default function AudioPlayer({
         </button>
       </div>
 
-      {/* Seekbar + time labels */}
       <div className="flex min-w-0 flex-1 flex-col justify-center gap-1">
         <input
           type="range"
@@ -227,7 +212,6 @@ export default function AudioPlayer({
         </div>
       </div>
 
-      {/* Speed */}
       <div ref={speedWrapRef} className="relative shrink-0">
         <button
           type="button"
@@ -259,7 +243,6 @@ export default function AudioPlayer({
         )}
       </div>
 
-      {/* Volume */}
       <div ref={volumeWrapRef} className="relative shrink-0">
         <button
           type="button"
@@ -294,7 +277,6 @@ export default function AudioPlayer({
         )}
       </div>
 
-      {/* Download */}
       <button
         type="button"
         onClick={download}

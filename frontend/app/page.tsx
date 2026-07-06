@@ -9,7 +9,6 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 function SplashScreen() {
   return (
     <div className="relative flex h-full w-full items-center justify-center overflow-hidden bg-slate-50">
-      {/* Full-screen branding cover (public/cover.jpeg). */}
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
         src="/cover.jpeg"

@@ -39,18 +39,13 @@ type DiarizedRow = {
   words?: { word: string; start: number; end: number }[];
 };
 
-// Brand palette only: Teal, Ocean Blue, Navy, Optima Aqua. Each speaker's
-// label text and left border share the same colour.
 const SPEAKER_HEX = [
-  "#2FB5AA", // Teal
-  "#2E6DBE", // Ocean Blue
-  "#1F2540", // Navy
-  "#3B96A9", // Optima Aqua
+  "#2FB5AA",
+  "#2E6DBE",
+  "#1F2540",
+  "#3B96A9",
 ];
 
-// Diarized rows for display: prefer the stored diarized array; fall back to the
-// legacy `transcript` for meetings saved before Phase 2 (which stored the
-// diarized entries there). Null => diarization not available yet.
 function getDiarizedRows(m: Meeting): DiarizedRow[] | null {
   if (m.diarized && m.diarized.length > 0) return m.diarized;
   if (!m.plainText && m.transcript.length > 0) return m.transcript;
@@ -58,6 +53,11 @@ function getDiarizedRows(m: Meeting): DiarizedRow[] | null {
 }
 
 function getPlainText(m: Meeting): string {
+  // Prefer the diarized text (same wording as the Diarize view) so a highlight
+  // made there mirrors exactly here. Fall back to plainText / legacy transcript.
+  if (m.diarized && m.diarized.length > 0) {
+    return m.diarized.map((r) => r.text).join("\n\n");
+  }
   if (m.plainText) return m.plainText;
   return m.transcript.map((t) => t.text).join("\n\n");
 }
@@ -94,7 +94,6 @@ export default function MyMeetings() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
 
-  // Detail-modal Transcript/Diarize toggle + on-demand re-diarization.
   const [detailView, setDetailView] = useState<"transcript" | "diarize">(
     "diarize",
   );
@@ -122,7 +121,6 @@ export default function MyMeetings() {
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mtgScrollRef = useRef<HTMLDivElement>(null);
 
-  // Rename a speaker everywhere in this meeting and persist it.
   const commitMtgSpeakerRename = (origSpeaker: string) => {
     const name = mtgSpeakerDraft.trim();
     setEditingMtgSpeakerIdx(null);
@@ -140,8 +138,6 @@ export default function MyMeetings() {
     );
   };
 
-  // As the audio plays (or after seeking), keep the currently-spoken word in
-  // view — scroll only when it drifts near/beyond the visible edges.
   useEffect(() => {
     const c = mtgScrollRef.current;
     if (!c) return;
@@ -184,8 +180,6 @@ export default function MyMeetings() {
   };
 
   const handleExport = async (meeting: Meeting) => {
-    // Save whichever view is open (diarized rows vs plain transcript); the user
-    // picks the format (.txt / .csv / .doc / .pdf) in the save dialog.
     const view = detailView === "transcript" ? "transcript" : "diarize";
     const rows = getDiarizedRows(meeting) ?? [];
     const exportRows = rows.map((r) => ({ speaker: r.speaker, text: r.text }));
@@ -207,7 +201,6 @@ export default function MyMeetings() {
       return;
     }
 
-    // Browser fallback (txt only).
     const formattedDate = new Date(meeting.date).toLocaleString();
     const body =
       view === "diarize" && exportRows.length
@@ -366,7 +359,6 @@ export default function MyMeetings() {
   };
 
   const handleMtgMouseUp = () => {
-    // Highlighting is a diarize-only feature.
     if (detailView !== "diarize") {
       setMtgHlButton(null);
       return;
@@ -410,19 +402,32 @@ export default function MyMeetings() {
     setShowDiarizeRetry(false);
     setDiarizing(true);
     setDiarizeProgress(2);
-    let timer: ReturnType<typeof setInterval> | null = setInterval(() => {
-      setDiarizeProgress((p) => (p < 90 ? p + 2 : p));
-    }, 400);
+    let creep: ReturnType<typeof setInterval> | null = null;
+    const stopCreep = () => {
+      if (creep) {
+        clearInterval(creep);
+        creep = null;
+      }
+    };
+    const onChunk = (done: number, total: number) => {
+      const t = total > 0 ? total : 1;
+      const base = (done / t) * 100;
+      setDiarizeProgress((p) => (base > p ? base : p));
+      stopCreep();
+      if (done >= t) return;
+      const next = ((done + 1) / t) * 100;
+      const startT = Date.now();
+      creep = setInterval(() => {
+        const elapsed = Date.now() - startT;
+        const frac = elapsed / (elapsed + 30000);
+        const val = base + (next - base) * frac;
+        setDiarizeProgress((p) => (val > p ? val : p));
+      }, 200);
+    };
     try {
       const rows = await diarizeAudioFile(meeting.audioPath, {
         jwt: localStorage.getItem("token"),
-        onProgress: (done, total) => {
-          if (total > 0) {
-            setDiarizeProgress((p) =>
-              Math.max(p, Math.min(96, (done / total) * 100)),
-            );
-          }
-        },
+        onProgress: onChunk,
       });
       const diarized = rows.map((r) => ({
         speaker: r.speaker,
@@ -431,10 +436,7 @@ export default function MyMeetings() {
         end: r.end,
         words: r.words,
       }));
-      if (timer) {
-        clearInterval(timer);
-        timer = null;
-      }
+      stopCreep();
       setDiarizeProgress(100);
       updateMeeting(meeting.id, { diarized });
       const updated = { ...meeting, diarized };
@@ -446,10 +448,7 @@ export default function MyMeetings() {
       setDetailView("diarize");
       showToast("Diarization complete");
     } catch {
-      if (timer) {
-        clearInterval(timer);
-        timer = null;
-      }
+      stopCreep();
       setDiarizing(false);
       setDiarizeProgress(0);
       setShowDiarizeRetry(true);
@@ -835,7 +834,6 @@ export default function MyMeetings() {
                     : "bg-slate-100 text-slate-700 hover:bg-slate-200"
                 } ${selectedMeeting.audioMediaUrl ? "" : "ml-auto"}`}
               >
-                {/* while diarizing, the button itself fills with progress */}
                 {diarizing && (
                   <span
                     className="absolute inset-y-0 left-0 bg-linear-to-r from-[#2FB5AA] to-[#2E6DBE] transition-[width] duration-200"
@@ -858,13 +856,16 @@ export default function MyMeetings() {
               onScroll={() => setMtgHlButton(null)}
               className="p-6 overflow-y-auto space-y-4 text-[15px] text-slate-700 custom-scrollbar"
             >
-              {mtgHighlightsOnly && mtgHighlights.length === 0 ? (
+              {diarizing ? (
+                <p className="py-16 text-center text-sm font-semibold text-slate-500">
+                  Separating speakers…
+                </p>
+              ) : mtgHighlightsOnly && mtgHighlights.length === 0 ? (
                 <p className="text-sm text-slate-400">
                   No highlights yet — select text and click Highlight.
                 </p>
               ) : !mtgHighlightsOnly && detailView === "transcript" ? (
                 <div className="whitespace-pre-wrap leading-relaxed">
-                  {/* Mirror the diarize-view highlights here too. */}
                   <HighlightedText
                     text={getPlainText(selectedMeeting)}
                     phrases={mtgHighlights}
@@ -889,9 +890,6 @@ export default function MyMeetings() {
                       </div>
                     );
                   }
-                  // Assign speaker colours from the full transcript so they stay
-                  // consistent, then (in highlights-only mode) show just the full
-                  // boxes that contain a highlight.
                   const order: string[] = [];
                   allRows.forEach((r) => {
                     if (!order.includes(r.speaker)) order.push(r.speaker);

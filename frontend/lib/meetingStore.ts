@@ -9,8 +9,6 @@ export type StoredMeeting = {
   transcript: { speaker: string; text: string; timestamp: string }[];
   filePath?: string;
   durationSec?: number;
-  // Phase 2: keep both views + the source audio so a meeting can be
-  // re-diarized later from MyMeetings.
   plainText?: string;
   diarized?: {
     speaker: string;
@@ -21,7 +19,6 @@ export type StoredMeeting = {
   }[];
   audioPath?: string;
   audioMediaUrl?: string;
-  // Manual highlights: the selected phrases + whether they're shown.
   highlights?: string[];
   highlightsShown?: boolean;
 };

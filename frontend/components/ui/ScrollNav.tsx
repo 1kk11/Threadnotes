@@ -2,9 +2,6 @@
 import { useEffect, useState, type RefObject } from "react";
 import { ChevronUp, ChevronDown } from "lucide-react";
 
-// Floating scroll-to-top / scroll-to-bottom controls for a scrollable element.
-// Buttons appear only when the content actually overflows and there's room to
-// scroll in that direction.
 export default function ScrollNav({
   targetRef,
 }: {

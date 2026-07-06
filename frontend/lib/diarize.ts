@@ -15,10 +15,6 @@ type Opts = {
   signal?: AbortSignal;
 };
 
-// Chunks a local audio file (via Electron), sends each chunk to the Cloud Vault
-// /diarize/stream endpoint, and stitches the speaker segments back together with
-// per-chunk time offsets. Shared by: first-pass live diarize retry, uploaded
-// files, and re-diarizing an already-saved meeting from MyMeetings.
 export async function diarizeAudioFile(
   audioFilePath: string,
   opts: Opts = {},
@@ -80,4 +76,46 @@ export async function diarizeAudioFile(
   }
 
   return stitched;
+}
+
+export async function transcribeAudioFile(
+  audioFilePath: string,
+  opts: Opts = {},
+): Promise<string> {
+  const electron =
+    typeof window !== "undefined" ? window.electronAPI : undefined;
+  if (!electron?.audioCompressAndRead) {
+    throw new Error("Audio processing is only available in the desktop app.");
+  }
+
+  const { chunks, mimeType } =
+    await electron.audioCompressAndRead(audioFilePath);
+
+  opts.onProgress?.(0, chunks.length);
+
+  const parts: string[] = [];
+  for (let i = 0; i < chunks.length; i++) {
+    const { buffer, name } = chunks[i];
+    const form = new FormData();
+    form.append("file", new Blob([buffer], { type: mimeType }), name);
+
+    const res = await fetch(`${API_URL}/transcribe/stream`, {
+      method: "POST",
+      headers: opts.jwt ? { Authorization: `Bearer ${opts.jwt}` } : undefined,
+      body: form,
+      signal: opts.signal,
+    });
+    const result = await res.json();
+    if (!res.ok || result.status === "error") {
+      throw new Error(
+        result.detail ||
+          result.message ||
+          `Transcription failed on part ${i + 1}: ${res.status}`,
+      );
+    }
+    if (result.text) parts.push(String(result.text).trim());
+    opts.onProgress?.(i + 1, chunks.length);
+  }
+
+  return parts.filter(Boolean).join("\n\n");
 }

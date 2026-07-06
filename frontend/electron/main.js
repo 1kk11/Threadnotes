@@ -258,9 +258,6 @@ async function handleMediaProtocol(request) {
 
 let mainWindow = null;
 
-// --- Floating always-on-top recorder widget --------------------------------
-// A tiny frameless window shown while recording so the timer + Pause/Stop stay
-// visible (and draggable) even when the main app is minimized / behind others.
 let recorderWidget = null;
 let recordingActive = false;
 
@@ -323,17 +320,20 @@ ipcMain.on("recorder:set-state", (_e, state) => {
 });
 
 ipcMain.on("recorder:action", (_e, action) => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send("recorder:action", action);
-        if (action === "stop") {
-            if (mainWindow.isMinimized()) mainWindow.restore();
-            mainWindow.focus();
-        }
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (action === "expand") {
+        if (mainWindow.isMinimized()) mainWindow.restore();
+        mainWindow.show();
+        mainWindow.focus();
+        return;
+    }
+    mainWindow.webContents.send("recorder:action", action);
+    if (action === "stop") {
+        if (mainWindow.isMinimized()) mainWindow.restore();
+        mainWindow.focus();
     }
 });
 
-// Unique id stamped into electron/build-info.json on every `npm run dist`.
-// Missing (e.g. `npm run dev`) => "dev", so dev never triggers the update flow.
 function getBuildId() {
     try {
         const p = path.join(__dirname, "build-info.json");
@@ -362,7 +362,6 @@ ipcMain.on("window-maximize-toggle", () => {
 });
 
 ipcMain.on("window-close", () => {
-    // Goes through the normal close flow, so the unsaved-work confirm still runs.
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close();
 });
 
@@ -395,7 +394,6 @@ function createWindow() {
         win.webContents.send("app-close-requested");
     });
 
-    // Floating widget only while the app is minimized (and recording).
     win.on("minimize", () => {
         if (recordingActive) showRecorderWidget();
     });
@@ -456,8 +454,6 @@ app.whenReady().then(async () => {
         (_wc, permission) => permission === "media",
     );
 
-    // On a NEW build (updated install), bust the stale HTTP/renderer cache so
-    // no old code/assets linger. localStorage (MyMeetings, etc.) is untouched.
     try {
         const buildId = getBuildId();
         const markerPath = path.join(app.getPath("userData"), "build-id.txt");
@@ -504,10 +500,6 @@ ipcMain.handle("save-transcript", async(_event, { content, defaultName }) => {
     return { saved: true, filePath };
 });
 
-// Save a recording (from a media:// URL or a raw file path) to a user-chosen
-// location via a native save dialog. The <a download> trick does not work for
-// the custom media:// scheme (Electron navigates the window instead), so the
-// renderer calls this for any media://-backed audio.
 ipcMain.handle("save-audio", async(_event, { src, defaultName } = {}) => {
     if (!src || typeof src !== "string") return { saved: false, reason: "no-src" };
 
@@ -549,7 +541,6 @@ ipcMain.handle("save-audio", async(_event, { src, defaultName } = {}) => {
     return { saved: true, filePath };
 });
 
-// ---- Transcript export (txt / csv / doc / pdf) -------------------------
 function escHtml(s) {
     return String(s ?? "")
         .replace(/&/g, "&amp;")
@@ -639,7 +630,6 @@ ipcMain.handle("export-transcript", async(_event, payload = {}) => {
                 fs.promises.unlink(tmp).catch(() => {});
             }
         } else if (ext === ".csv") {
-            // BOM so Excel reads UTF-8 correctly.
             await fs.promises.writeFile(filePath, "﻿" + buildExportCsv(view, plainText, rows), "utf-8");
         } else if (ext === ".doc") {
             await fs.promises.writeFile(filePath, buildExportHtml(view, plainText, rows, title), "utf-8");
@@ -816,9 +806,6 @@ ipcMain.handle("audio-compress-and-read", async(_event, filePath) => {
         "-y",
         "-fflags", "+genpts+discardcorrupt",
         "-err_detect", "ignore_err",
-        // On the recovery pass, probe deeply and DON'T force the container so
-        // ffmpeg can resync past a damaged/partial EBML (webm) header instead of
-        // bailing out with "Invalid data found".
         ...(recover ? ["-analyzeduration", "100M", "-probesize", "100M"] : []),
         ...(isWebm && !recover ? ["-f", "webm"] : []),
         "-i", filePath,
@@ -836,8 +823,6 @@ ipcMain.handle("audio-compress-and-read", async(_event, filePath) => {
                 "This file has no audio track to transcribe. Please upload a file that contains audio.",
             );
         }
-        // Corrupt/partial header (EBML parsing failed / invalid data): retry once
-        // with deep probing and no forced container to try to salvage the audio.
         if (/EBML header parsing failed|Invalid data found|error opening input/i.test(msg)) {
             console.warn("[Recorder/main] primary decode failed, attempting recovery pass:", msg);
             try {

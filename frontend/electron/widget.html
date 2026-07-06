@@ -94,6 +94,28 @@
       #stop {
         background: linear-gradient(90deg, #f43f5e, #ef4444);
       }
+      #expand {
+        -webkit-app-region: no-drag;
+        flex: 0 0 auto;
+        width: 24px;
+        height: 24px;
+        padding: 0;
+        background: #f1f5f9;
+        color: #475569;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 7px;
+      }
+      #expand:hover {
+        background: #e2e8f0;
+        color: #1f2540;
+        filter: none;
+      }
+      #expand svg {
+        width: 13px;
+        height: 13px;
+      }
     </style>
   </head>
   <body>
@@ -102,6 +124,11 @@
         <span class="dot" id="dot"></span>
         <span id="label">Listening</span>
         <span id="time">00:00:00</span>
+        <button id="expand" title="Open ThreadNotes">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" />
+          </svg>
+        </button>
       </div>
       <div class="row">
         <button id="toggle">Pause</button>
@@ -134,6 +161,9 @@
       });
       document.getElementById("stop").addEventListener("click", () => {
         api.recorderAction && api.recorderAction("stop");
+      });
+      document.getElementById("expand").addEventListener("click", () => {
+        api.recorderAction && api.recorderAction("expand");
       });
     </script>
   </body>

@@ -19,7 +19,6 @@ import TranscriptArea from "./TranscriptArea";
 import {
   loadMeetings,
   addMeeting,
-  updateMeeting,
   MEETINGS_EVENT,
 } from "@/lib/meetingStore";
 import { getUserName, clearSession } from "@/lib/auth";
@@ -50,13 +49,11 @@ export type CaptureTab = "live" | "upload";
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 const stripSpeakerPrefix = (text: string) => text.replace(/^\[.*?\]\s*/, "");
 
-// Brand palette only: Teal, Ocean Blue, Navy, Optima Aqua. Each speaker's
-// label text and left border share the same colour.
 const SPEAKER_HEX = [
-  "#2FB5AA", // Teal
-  "#2E6DBE", // Ocean Blue
-  "#1F2540", // Navy
-  "#3B96A9", // Optima Aqua
+  "#2FB5AA",
+  "#2E6DBE",
+  "#1F2540",
+  "#3B96A9",
 ];
 
 function formatTime(totalSeconds: number) {
@@ -102,24 +99,15 @@ export default function Dashboard() {
   const [mergedTranscript, setMergedTranscript] = useState<MergedTranscriptRow[]>([]);
   const [isDiarizing, setIsDiarizing] = useState(false);
   const [diarizeProgress, setDiarizeProgress] = useState(0);
-  // Phase 2: which view of a finished recording is shown, the source audio for
-  // retry, and the retry modal shown when diarization fails.
   const [transcriptView, setTranscriptView] = useState<"transcript" | "diarize">(
     "transcript",
   );
   const [audioFilePath, setAudioFilePath] = useState<string | null>(null);
   const [showDiarizeRetryModal, setShowDiarizeRetryModal] = useState(false);
-  // Once this session is saved to MyMeetings, remember its id so that if it gets
-  // diarized elsewhere (e.g. from MyMeetings) we can reuse that result here
-  // instead of hitting the diarize API again.
   const [savedMeetingId, setSavedMeetingId] = useState<string | null>(null);
-  // Manual text highlights (phrases) + whether they're shown + the floating
-  // "Highlight" button anchored to the current selection.
   const [highlights, setHighlights] = useState<string[]>([]);
   const [showHighlights, setShowHighlights] = useState(true);
-  // When on, the transcript shows ONLY the highlighted snippets.
   const [highlightsOnly, setHighlightsOnly] = useState(false);
-  // Inline speaker rename: which diarized row's label is being edited + draft.
   const [editingSpeakerIdx, setEditingSpeakerIdx] = useState<number | null>(null);
   const [speakerDraft, setSpeakerDraft] = useState("");
   const [hlButton, setHlButton] = useState<{
@@ -135,18 +123,6 @@ export default function Dashboard() {
   const transcriptScrollRef = useRef<HTMLDivElement | null>(null);
 
   const [showFinishModal, setShowFinishModal] = useState(false);
-  // Meeting setup form (title + duration), the running meeting's title/target,
-  // and the "5 minutes left — extend?" reminder.
-  const [showStartForm, setShowStartForm] = useState(false);
-  const [formTitle, setFormTitle] = useState("");
-  const [formHours, setFormHours] = useState("1");
-  const [formMinutes, setFormMinutes] = useState("0");
-  const [meetingTitle, setMeetingTitle] = useState("");
-  const [meetingDurationSec, setMeetingDurationSec] = useState(0);
-  const [showExtendReminder, setShowExtendReminder] = useState(false);
-  const [extendMinutes, setExtendMinutes] = useState("15");
-  const reminderShownRef = useRef(false);
-  const autoFinishingRef = useRef(false);
   const [showNewConvoModal, setShowNewConvoModal] = useState(false);
   const [showCloseModal, setShowCloseModal] = useState(false);
   const [isSaved, setIsSaved] = useState(false);
@@ -177,26 +153,26 @@ export default function Dashboard() {
     }
   }, []);
 
-  const startSmoothProgress = useCallback(
-    (audioDurationSec: number) => {
+  // Per-chunk progress: each completed chunk = 100/total. Between completions we
+  // gently creep toward the next chunk's boundary so the bar never looks frozen.
+  const handleDiarizeProgress = useCallback(
+    (done: number, total: number) => {
+      const t = total > 0 ? total : 1;
+      const base = (done / t) * 100;
+      setDiarizeProgress((p) => (base > p ? base : p));
       stopSmoothProgress();
-      setDiarizeProgress(2);
-      const estMs = Math.max(8000, audioDurationSec * 1000 * 0.5);
+      if (done >= t) return;
+      const next = ((done + 1) / t) * 100;
       const startT = Date.now();
       progressTimerRef.current = setInterval(() => {
         const elapsed = Date.now() - startT;
-        const pct = Math.min(92, 2 + (elapsed / estMs) * 90);
-        setDiarizeProgress((p) => (pct > p ? pct : p));
+        const frac = elapsed / (elapsed + 30000);
+        const val = base + (next - base) * frac;
+        setDiarizeProgress((p) => (val > p ? val : p));
       }, 200);
     },
     [stopSmoothProgress],
   );
-
-  const handleDiarizeProgress = useCallback((done: number, total: number) => {
-    if (total <= 0) return;
-    const floor = Math.min(96, (done / total) * 100);
-    setDiarizeProgress((p) => (floor > p ? floor : p));
-  }, []);
 
   const handleAzurePartial = useCallback((text: string) => {
     if (!liveRef.current) return;
@@ -370,9 +346,6 @@ export default function Dashboard() {
     return map;
   }, [mergedTranscript]);
 
-  // A diarized row "has a highlight" if any highlighted phrase falls inside it.
-  // Used by the highlights-only view to show the full speaker box, not just the
-  // clipped phrase.
   const rowHasHighlight = (item: MergedTranscriptRow) => {
     if (!highlights.length) return false;
     const rowText = item.words?.length
@@ -381,7 +354,6 @@ export default function Dashboard() {
     return highlightRanges(rowText, highlights).length > 0;
   };
 
-  // Rename a speaker everywhere in the transcript (e.g. "Speaker 1" -> "Shaurya").
   const commitSpeakerRename = (origSpeaker: string) => {
     const name = speakerDraft.trim();
     setEditingSpeakerIdx(null);
@@ -450,8 +422,6 @@ export default function Dashboard() {
     setHighlightsOnly(false);
     setHlButton(null);
     setStatusMessage(null);
-    reminderShownRef.current = false;
-    autoFinishingRef.current = false;
     const ok = await start();
     if (ok) {
       startedAtRef.current = Date.now();
@@ -463,31 +433,6 @@ export default function Dashboard() {
       setStatusMessage("⚠️ Couldn't start recording");
     }
   }, [start, clearPlayback]);
-
-  // Meeting setup form → set title + target duration, then start recording.
-  const submitStartForm = useCallback(() => {
-    const h = Math.max(0, parseInt(formHours || "0", 10) || 0);
-    const m = Math.max(0, parseInt(formMinutes || "0", 10) || 0);
-    const totalSec = (h * 60 + m) * 60;
-    if (totalSec <= 0) return; // require a duration
-    setMeetingTitle(formTitle.trim());
-    setMeetingDurationSec(totalSec);
-    reminderShownRef.current = false;
-    autoFinishingRef.current = false;
-    setShowStartForm(false);
-    void handleStart();
-  }, [formHours, formMinutes, formTitle, handleStart]);
-
-  // Extend the running meeting by N minutes (re-arms the 5-min reminder).
-  const submitExtend = useCallback(() => {
-    const add = Math.max(0, parseInt(extendMinutes || "0", 10) || 0);
-    setShowExtendReminder(false);
-    if (add <= 0) return;
-    setMeetingDurationSec((d) => d + add * 60);
-    reminderShownRef.current = false;
-    autoFinishingRef.current = false;
-    setStatusMessage(`Meeting extended by ${add} min`);
-  }, [extendMinutes]);
 
   const handlePause = useCallback(() => {
     pause();
@@ -502,9 +447,6 @@ export default function Dashboard() {
     setStatusMessage("Listening...");
   }, [resume, sessionTime]);
 
-  // Floating recorder widget: tell the main process when recording is active
-  // (so it can show/hide the always-on-top window on minimize) and stream the
-  // current timer + paused state to it.
   useEffect(() => {
     window.electronAPI?.recorderSetActive?.(isRecording);
   }, [isRecording]);
@@ -517,7 +459,6 @@ export default function Dashboard() {
     });
   }, [isRecording, sessionTime, isPaused]);
 
-  // Pause / Resume / Stop coming from the floating widget.
   useEffect(() => {
     const api = typeof window !== "undefined" ? window.electronAPI : undefined;
     if (!api?.onRecorderAction) return;
@@ -531,107 +472,39 @@ export default function Dashboard() {
     });
   }, [handlePause, handleResume]);
 
-  // Silently save the finished meeting to MyMeetings + a local backup file named
-  // by the meeting title. No save dialog. Diarization is done later (MyMeetings).
-  const autoSaveMeeting = useCallback(
-    (audioMediaUrl: string | null, audioPath: string | null) => {
-      const hasContent = transcriptText.trim() || lines.length > 0;
-      if (!hasContent) return;
-      const firstWords =
-        lines[0]?.split(" ").slice(0, 5).join(" ") || "Discussion";
-      const title = meetingTitle.trim() || `Meeting on ${firstWords}`;
-      const entries = lines.map((l) => ({
-        speaker: "Speaker",
-        text: l,
-        timestamp: "",
-      }));
-      const record = {
-        id: Date.now().toString(),
-        topic: title,
-        date: new Date().toISOString(),
-        transcript: entries,
-        durationSec: sessionTime,
-        plainText: transcriptText,
-        diarized: undefined,
-        audioPath: audioPath || undefined,
-        audioMediaUrl:
-          audioMediaUrl && audioMediaUrl.startsWith("media://")
-            ? audioMediaUrl
-            : undefined,
-      };
-      addMeeting(record);
-      setSavedMeetingId(record.id);
-      setIsSaved(true);
-      // Silent PC backup, named by the meeting title.
-      void window.electronAPI?.saveTranscriptLocal?.(
-        transcriptText,
-        title,
-        "txt",
-      );
-      setStatusMessage(`✅ Saved as "${title}" — diarize it in MyMeetings.`);
-    },
-    [meetingTitle, transcriptText, lines, sessionTime],
-  );
-
   const confirmFinish = useCallback(async () => {
     const sid = sessionIdRef.current;
     stopLiveEvents();
     setShowFinishModal(false);
-    setShowExtendReminder(false);
     setIsRecording(false);
     setIsPaused(false);
     setInterim("");
     setTranscriptView("transcript");
     setMergedTranscript([]);
+    setIsSaved(false);
     setStatusMessage("Finishing recording...");
     try {
       const result = await finishRecording();
       if (sid !== sessionIdRef.current) return;
-      const finalAudioUrl = result?.audioUrl || null;
-      const finalAudioPath =
-        result?.audioFilePath || getRecordingFilePath() || null;
-      if (finalAudioUrl) {
+      if (result?.audioUrl) {
         setCurrentAudioTime(0);
         setAudioUrl((prev) => {
           if (prev && prev.startsWith("blob:")) URL.revokeObjectURL(prev);
-          return finalAudioUrl;
+          return result.audioUrl;
         });
       }
-      if (finalAudioPath) setAudioFilePath(finalAudioPath);
-      // Auto-save the meeting (title-named) — both on manual Finish and timeout.
-      autoSaveMeeting(finalAudioUrl, finalAudioPath);
+      if (result?.audioFilePath) setAudioFilePath(result.audioFilePath);
+      setStatusMessage(
+        "Transcript ready — click Diarize to separate speakers, or Save.",
+      );
     } catch (e: any) {
       if (sid !== sessionIdRef.current) return;
       const path = getRecordingFilePath();
       if (path) setAudioFilePath(path);
       setStatusMessage("⚠️ Could not finalize the recording");
     }
-  }, [finishRecording, getRecordingFilePath, stopLiveEvents, autoSaveMeeting]);
+  }, [finishRecording, getRecordingFilePath, stopLiveEvents]);
 
-  // Duration watchdog: 5-min "extend?" reminder, then auto-finish + save at the
-  // target time. Short meetings (<= 5 min) skip the reminder.
-  useEffect(() => {
-    if (!isRecording || meetingDurationSec <= 0) return;
-    const remaining = meetingDurationSec - sessionTime;
-    if (remaining <= 0) {
-      if (autoFinishingRef.current) return;
-      autoFinishingRef.current = true;
-      void confirmFinish();
-      return;
-    }
-    if (
-      meetingDurationSec > 300 &&
-      remaining <= 300 &&
-      !reminderShownRef.current
-    ) {
-      reminderShownRef.current = true;
-      setShowExtendReminder(true);
-    }
-  }, [sessionTime, meetingDurationSec, isRecording, confirmFinish]);
-
-  // Diarize the finalized recording ON DEMAND (triggered by the Diarize button
-  // and by the retry modal). Only runs when not already diarized, so the API is
-  // hit exactly once — clicking the toggle afterwards just switches views.
   const handleDiarizeRetry = useCallback(async () => {
     if (!audioFilePath || isDiarizing || mergedTranscript.length > 0) {
       setShowDiarizeRetryModal(false);
@@ -640,8 +513,6 @@ export default function Dashboard() {
     const sid = sessionIdRef.current;
     setShowDiarizeRetryModal(false);
 
-    // If this session was already diarized elsewhere (e.g. in MyMeetings after
-    // saving), reuse that stored result instead of hitting the API again.
     if (savedMeetingId) {
       const saved = loadMeetings().find((m) => m.id === savedMeetingId);
       if (saved?.diarized && saved.diarized.length > 0) {
@@ -663,7 +534,6 @@ export default function Dashboard() {
     setIsDiarizing(true);
     setDiarizeProgress(2);
     setStatusMessage("Separating speakers...");
-    startSmoothProgress(sessionTime);
     try {
       const rows = (await diarizeAudioFile(audioFilePath, {
         jwt: localStorage.getItem("token"),
@@ -692,8 +562,6 @@ export default function Dashboard() {
     isDiarizing,
     mergedTranscript.length,
     savedMeetingId,
-    sessionTime,
-    startSmoothProgress,
     stopSmoothProgress,
     handleDiarizeProgress,
     saveTranscriptLocally,
@@ -701,14 +569,28 @@ export default function Dashboard() {
 
   const handleProcessUpload = useCallback(async () => {
     if (!uploadFile) return;
+    // Cancel any previous in-flight upload/diarization and invalidate its async
+    // callbacks, so a stale result can never clobber this new file (which caused
+    // the transcript to mismatch the audio and the status to stick).
+    if (uploadAbortRef.current) {
+      try {
+        uploadAbortRef.current.abort();
+      } catch {}
+      uploadAbortRef.current = null;
+    }
+    sessionIdRef.current += 1;
     const sid = sessionIdRef.current;
     clearPlayback();
     setLines([]);
     setInterim("");
     setMergedTranscript([]);
     setIsSaved(false);
-    setIsUploading(true);
-    setUploadProgress(2);
+    // Uploads run through the SAME diarize UI as everything else — clicking
+    // Process starts diarization immediately with the real diarize progress bar
+    // (no separate "Uploading…" state, no clickable Diarize button to re-run).
+    setIsDiarizing(true);
+    setDiarizeProgress(2);
+    setStatusMessage("Separating speakers…");
 
     const abort = new AbortController();
     uploadAbortRef.current = abort;
@@ -717,102 +599,42 @@ export default function Dashboard() {
     const electron =
       typeof window !== "undefined" ? window.electronAPI : undefined;
     const localPath = electron?.getPathForFile?.(uploadFile) || "";
-    // Remember the source file so an uploaded meeting can be re-diarized later.
     setAudioFilePath(localPath || null);
 
     const playbackUrl = URL.createObjectURL(uploadFile);
     setCurrentAudioTime(0);
     setAudioUrl(playbackUrl);
 
-    const finish = (rows: MergedTranscriptRow[], doneMsg: string) => {
-      setUploadProgress(100);
-      setTimeout(() => {
-        if (sid !== sessionIdRef.current) return;
-        setIsUploading(false);
-        setUploadProgress(0);
-        if (rows.length > 0) {
-          setMergedTranscript(rows);
-          setLines([]);
-          // Uploads have no plain live transcript — show the diarized view.
-          setTranscriptView("diarize");
-          setStatusMessage("Analysis ready!");
-          setActiveTab("live");
-          void saveTranscriptLocally(rows);
-        } else {
-          setStatusMessage(doneMsg);
-        }
-      }, 300);
+    const applyDiarized = (rows: MergedTranscriptRow[]) => {
+      if (sid !== sessionIdRef.current) return;
+      stopSmoothProgress();
+      setIsDiarizing(false);
+      setDiarizeProgress(0);
+      setMergedTranscript(rows);
+      setLines([]);
+      setTranscriptView("diarize");
+      setActiveTab("live");
+      setStatusMessage(
+        rows.length
+          ? "Analysis ready!"
+          : "No speech detected in the uploaded file.",
+      );
+      if (rows.length) void saveTranscriptLocally(rows);
     };
 
     try {
       if (electron?.audioCompressAndRead && localPath) {
-        setStatusMessage("Compressing audio...");
-        const climb = setInterval(
-          () => setUploadProgress((p) => (p < 40 ? p + 4 : p)),
-          600,
-        );
-        const { chunks, segmentSeconds, mimeType } =
-          await electron.audioCompressAndRead(localPath);
-        clearInterval(climb);
+        const rows = (await diarizeAudioFile(localPath, {
+          jwt: token,
+          signal: abort.signal,
+          onProgress: handleDiarizeProgress,
+        })) as MergedTranscriptRow[];
         if (sid !== sessionIdRef.current) return;
-
-        const stitched: MergedTranscriptRow[] = [];
-        for (let i = 0; i < chunks.length; i++) {
-          setStatusMessage(
-            chunks.length > 1
-              ? `Diarizing part ${i + 1} of ${chunks.length}...`
-              : "Diarizing with GPT-4o...",
-          );
-          const form = new FormData();
-          form.append(
-            "file",
-            new Blob([chunks[i].buffer], { type: mimeType }),
-            chunks[i].name,
-          );
-          const res = await fetch(`${API_URL}/diarize/stream`, {
-            method: "POST",
-            headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-            body: form,
-            signal: abort.signal,
-          });
-          const data = await res.json();
-          if (sid !== sessionIdRef.current) return;
-          if (!res.ok || data.status === "error") {
-            throw new Error(
-              data.detail || data.message ||
-                `Diarization failed on part ${i + 1}`,
-            );
-          }
-          const offset = i * segmentSeconds;
-          const segs = (Array.isArray(data.merged_transcript)
-            ? data.merged_transcript
-            : Array.isArray(data.segments)
-              ? data.segments
-              : []) as MergedTranscriptRow[];
-          for (const s of segs) {
-            stitched.push({
-              ...s,
-              start: (Number(s.start) || 0) + offset,
-              end: (Number(s.end) || 0) + offset,
-              words: s.words?.map((w) => ({
-                ...w,
-                start: (Number(w.start) || 0) + offset,
-                end: (Number(w.end) || 0) + offset,
-              })),
-            });
-          }
-          setUploadProgress(40 + Math.round(((i + 1) / chunks.length) * 55));
-        }
-
-        finish(stitched, "No speech detected in the uploaded file.");
+        applyDiarized(rows);
         return;
       }
 
-      setStatusMessage("Uploading & diarizing with GPT-4o...");
-      const climb = setInterval(
-        () => setUploadProgress((p) => (p < 90 ? p + 3 : p)),
-        1000,
-      );
+      handleDiarizeProgress(0, 1);
       const form = new FormData();
       form.append("file", uploadFile);
       const res = await fetch(`${API_URL}/diarize/stream`, {
@@ -822,36 +644,40 @@ export default function Dashboard() {
         signal: abort.signal,
       });
       const data = await res.json();
-      clearInterval(climb);
       if (sid !== sessionIdRef.current) return;
       if (!res.ok || data.status === "error") {
-        setIsUploading(false);
-        setUploadProgress(0);
+        stopSmoothProgress();
+        setIsDiarizing(false);
+        setDiarizeProgress(0);
         setStatusMessage(
           data.detail || data.message || "Failed to process file.",
         );
         return;
       }
-      finish(
+      applyDiarized(
         Array.isArray(data.segments)
           ? (data.segments as MergedTranscriptRow[])
           : [],
-        "No speech detected in the uploaded file.",
       );
     } catch (e: any) {
       if (e?.name === "AbortError" || sid !== sessionIdRef.current) return;
-      setIsUploading(false);
-      setUploadProgress(0);
+      stopSmoothProgress();
+      setIsDiarizing(false);
+      setDiarizeProgress(0);
       setStatusMessage(e?.message || "Could not process the file.");
     } finally {
       if (uploadAbortRef.current === abort) uploadAbortRef.current = null;
     }
-  }, [uploadFile, clearPlayback, saveTranscriptLocally]);
+  }, [
+    uploadFile,
+    clearPlayback,
+    saveTranscriptLocally,
+    handleDiarizeProgress,
+    stopSmoothProgress,
+  ]);
 
   const handleSaveTranscript = useCallback(async () => {
     if (!transcriptText.trim() && mergedTranscript.length === 0) return;
-    // Save the file matching the current view: diarized rows on the Diarize
-    // view, plain text on the Transcript view. MyMeetings always keeps both.
     const kind = transcriptView === "diarize" ? "Diarized" : "Transcript";
     const defaultName = `ThreadNotes_${kind}_${new Date().toISOString().slice(0, 10)}.txt`;
 
@@ -917,8 +743,6 @@ export default function Dashboard() {
               words: item.words,
             }))
           : undefined;
-      // Fall back to the live recorder's file path so saving BEFORE diarization
-      // finishes still captures the audio (enables re-diarize later).
       const recordedPath = audioFilePath || getRecordingFilePath();
       const record = {
         id: Date.now().toString(),
@@ -935,22 +759,8 @@ export default function Dashboard() {
         highlights: highlights.length ? highlights : undefined,
         highlightsShown: showHighlights,
       };
-      // If this session was already saved (auto-save on finish), update that
-      // meeting instead of creating a duplicate — e.g. after diarizing here.
-      if (savedMeetingId) {
-        updateMeeting(savedMeetingId, {
-          durationSec: record.durationSec,
-          plainText: record.plainText,
-          diarized: record.diarized,
-          audioPath: record.audioPath,
-          audioMediaUrl: record.audioMediaUrl,
-          highlights: record.highlights,
-          highlightsShown: record.highlightsShown,
-        });
-      } else {
-        addMeeting(record);
-        setSavedMeetingId(record.id);
-      }
+      addMeeting(record);
+      setSavedMeetingId(record.id);
       setIsSaved(true);
       setStatusMessage("✅ Saved!");
     } catch {
@@ -966,11 +776,9 @@ export default function Dashboard() {
     audioUrl,
     highlights,
     showHighlights,
-    savedMeetingId,
     getRecordingFilePath,
   ]);
 
-  // Ctrl/Cmd+S opens the save dialog once diarization has produced a transcript.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && (e.key === "s" || e.key === "S")) {
@@ -1016,11 +824,6 @@ export default function Dashboard() {
     setHighlightsOnly(false);
     setHlButton(null);
     setShowDiarizeRetryModal(false);
-    setMeetingDurationSec(0);
-    setMeetingTitle("");
-    setShowExtendReminder(false);
-    reminderShownRef.current = false;
-    autoFinishingRef.current = false;
     setActiveTab("live");
     setView("dashboard");
   }, [cancel, clearPlayback, stopLiveEvents, stopSmoothProgress]);
@@ -1095,9 +898,7 @@ export default function Dashboard() {
     setInterim("");
   }, []);
 
-  // Show a floating "Highlight" button anchored to the current text selection.
   const handleTranscriptMouseUp = useCallback(() => {
-    // Highlighting is a diarize-only feature.
     if (transcriptView !== "diarize") {
       setHlButton(null);
       return;
@@ -1127,7 +928,6 @@ export default function Dashboard() {
       const already = prev.some(
         (h) => h === text || h.includes(text) || text.includes(h),
       );
-      // Selecting already-highlighted text un-highlights it.
       return already
         ? prev.filter(
             (h) => !(h === text || h.includes(text) || text.includes(h)),
@@ -1220,12 +1020,7 @@ export default function Dashboard() {
                       lines.length > 0 ||
                       mergedTranscript.length > 0)
                   }
-                  onStart={() => {
-                    setFormTitle("");
-                    setFormHours("1");
-                    setFormMinutes("0");
-                    setShowStartForm(true);
-                  }}
+                  onStart={handleStart}
                   onPause={handlePause}
                   onResume={handleResume}
                   onStop={() => setShowFinishModal(true)}
@@ -1315,7 +1110,7 @@ export default function Dashboard() {
                             >
                               {isDiarizing ? "Diarizing…" : "Diarize"}
                             </button>
-                          ) : (
+                          ) : transcriptText ? (
                             <button
                               onClick={() =>
                                 setTranscriptView((v) =>
@@ -1328,6 +1123,10 @@ export default function Dashboard() {
                                 ? "Diarize"
                                 : "Transcript"}
                             </button>
+                          ) : (
+                            <span className="shrink-0 rounded-full bg-slate-100 px-4 py-1 text-xs font-semibold text-slate-500 shadow-sm">
+                              Diarized
+                            </span>
                           )}
                         </div>
                       </div>
@@ -1345,11 +1144,15 @@ export default function Dashboard() {
                         </p>
                       ) : !highlightsOnly && transcriptView === "transcript" ? (
                         <div className="whitespace-pre-wrap text-[15px] leading-relaxed text-slate-700">
-                          {transcriptText ? (
-                            // Highlights are created in the Diarize view; mirror
-                            // the same highlighted phrases here in Transcript.
+                          {transcriptText || mergedTranscript.length ? (
                             <HighlightedText
-                              text={transcriptText}
+                              text={
+                                mergedTranscript.length
+                                  ? mergedTranscript
+                                      .map((r) => stripSpeakerPrefix(r.text))
+                                      .join("\n\n")
+                                  : transcriptText
+                              }
                               phrases={highlights}
                               enabled={showHighlights}
                             />
@@ -1533,107 +1336,6 @@ export default function Dashboard() {
         </div>
       )}
 
-      {showStartForm && (
-        <div className="fixed inset-0 z-100 flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-sm rounded-3xl border border-white/60 bg-white p-7 shadow-2xl">
-            <h3 className="text-xl font-bold text-slate-900">New meeting</h3>
-            <p className="mt-1 text-sm text-slate-500">
-              Give it a title and set how long it should run.
-            </p>
-
-            <label className="mt-5 block text-xs font-bold uppercase tracking-wide text-slate-500">
-              Meeting title
-            </label>
-            <input
-              autoFocus
-              value={formTitle}
-              onChange={(e) => setFormTitle(e.target.value)}
-              placeholder="e.g. Product sync"
-              className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-800 outline-none focus:ring-2 focus:ring-violet-500/40"
-            />
-
-            <label className="mt-4 block text-xs font-bold uppercase tracking-wide text-slate-500">
-              Duration
-            </label>
-            <div className="mt-1.5 flex items-center gap-3">
-              <div className="flex items-center gap-1.5">
-                <input
-                  type="number"
-                  min={0}
-                  value={formHours}
-                  onChange={(e) => setFormHours(e.target.value)}
-                  className="w-16 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-center text-sm text-slate-800 outline-none focus:ring-2 focus:ring-violet-500/40"
-                />
-                <span className="text-sm text-slate-500">hr</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <input
-                  type="number"
-                  min={0}
-                  max={59}
-                  value={formMinutes}
-                  onChange={(e) => setFormMinutes(e.target.value)}
-                  className="w-16 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-center text-sm text-slate-800 outline-none focus:ring-2 focus:ring-violet-500/40"
-                />
-                <span className="text-sm text-slate-500">min</span>
-              </div>
-            </div>
-
-            <div className="mt-7 flex gap-3">
-              <button
-                onClick={() => setShowStartForm(false)}
-                className="flex-1 rounded-xl bg-slate-100 py-3 text-sm font-bold text-slate-700 transition-colors hover:bg-slate-200"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={submitStartForm}
-                className="flex-1 rounded-xl bg-linear-to-r from-violet-500 to-blue-500 py-3 text-sm font-bold text-white shadow-lg shadow-violet-500/25 transition-all hover:from-violet-600 hover:to-blue-600"
-              >
-                Start meeting
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {showExtendReminder && (
-        <div className="fixed inset-0 z-100 flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-sm rounded-3xl border border-white/60 bg-white p-7 shadow-2xl">
-            <h3 className="text-xl font-bold text-slate-900">
-              5 minutes left
-            </h3>
-            <p className="mt-2 text-sm text-slate-500">
-              Your meeting is about to end. Want to extend the duration?
-            </p>
-            <div className="mt-4 flex items-center gap-1.5">
-              <input
-                type="number"
-                min={1}
-                value={extendMinutes}
-                onChange={(e) => setExtendMinutes(e.target.value)}
-                className="w-20 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-center text-sm text-slate-800 outline-none focus:ring-2 focus:ring-violet-500/40"
-              />
-              <span className="text-sm text-slate-500">more minutes</span>
-            </div>
-            <div className="mt-7 flex gap-3">
-              <button
-                onClick={() => setShowExtendReminder(false)}
-                className="flex-1 rounded-xl bg-slate-100 py-3 text-sm font-bold text-slate-700 transition-colors hover:bg-slate-200"
-              >
-                No, finish soon
-              </button>
-              <button
-                onClick={submitExtend}
-                className="flex-1 rounded-xl bg-linear-to-r from-violet-500 to-blue-500 py-3 text-sm font-bold text-white shadow-lg shadow-violet-500/25 transition-all hover:from-violet-600 hover:to-blue-600"
-              >
-                Extend
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {showFinishModal && (
         <div className="fixed inset-0 z-100 flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-sm">
           <div className="w-full max-w-sm rounded-3xl border border-white/60 bg-white p-7 shadow-2xl">
@@ -1641,8 +1343,8 @@ export default function Dashboard() {
               Finish recording?
             </h3>
             <p className="mt-2 text-sm text-slate-500">
-              We&apos;ll stop and save this meeting. You can diarize it anytime
-              from MyMeetings.
+              We&apos;ll stop the live stream and generate the final
+              speaker-tagged transcript.
             </p>
             <div className="mt-7 flex gap-3">
               <button

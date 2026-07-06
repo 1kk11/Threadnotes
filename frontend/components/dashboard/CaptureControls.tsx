@@ -77,8 +77,6 @@ export default function CaptureControls({
   const [isDragging, setIsDragging] = useState(false);
   const isActive = isRecording && !isPaused;
 
-  // Circle state → colour + fill. Recording = blue, Paused = amber,
-  // Completed = full green ring, Idle = empty grey.
   const circleState = isCompleted
     ? "completed"
     : isActive
@@ -419,10 +417,10 @@ export default function CaptureControls({
 
             <button
               onClick={onProcessUpload}
-              disabled={!uploadFile || isUploading}
+              disabled={!uploadFile || isUploading || isDiarizing}
               className="flex w-full shrink-0 items-center justify-center gap-2 rounded-xl bg-linear-to-r from-violet-500 to-blue-500 py-4 [@media(max-height:760px)]:py-2.5 text-sm font-bold text-white shadow-lg shadow-violet-500/25 transition-all hover:from-violet-600 hover:to-blue-600 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {isUploading ? "Processing..." : "Process File"}
+              {isUploading || isDiarizing ? "Processing..." : "Process File"}
             </button>
           </>
         )}

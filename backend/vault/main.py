@@ -861,6 +861,45 @@ async def diarize_stream(
     }
 
 
+def _run_transcription(audio_bytes: bytes, filename: str, content_type: str = "") -> str:
+    client = build_openai_client()
+    deployment = os.getenv("AZURE_WHISPER_DEPLOYMENT", "whisper").strip()
+    safe_name = filename or "audio.ogg"
+    mime = content_type or "audio/ogg"
+    resp = client.audio.transcriptions.create(
+        model=deployment,
+        file=(safe_name, audio_bytes, mime),
+        response_format="text",
+    )
+    if isinstance(resp, str):
+        return resp.strip()
+    return (getattr(resp, "text", "") or str(resp)).strip()
+
+
+@app.post("/transcribe/stream")
+async def transcribe_stream(
+    file: UploadFile = File(...),
+    user: dict = Depends(get_current_user),
+):
+    audio_bytes = await file.read()
+    if not audio_bytes:
+        raise HTTPException(status_code=400, detail="Empty audio upload.")
+    try:
+        text = await asyncio.to_thread(
+            _run_transcription,
+            audio_bytes,
+            file.filename or "audio.ogg",
+            file.content_type or "audio/ogg",
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        traceback.print_exc()
+        return {"status": "error", "message": _friendly_diarize_error(exc)}
+
+    return {"status": "success", "text": text}
+
+
 @app.get("/")
 async def root():
     return {"status": "ok", "message": "ThreadNotes Cloud Vault is running."}

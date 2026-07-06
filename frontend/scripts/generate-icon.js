@@ -3,10 +3,8 @@ const path = require("path");
 const zlib = require("zlib");
 
 const SIZE = 256;
-// Brand palette: same white document glyph, background is a Teal -> Ocean Blue
-// diagonal gradient (matches the in-app icon). No more indigo/purple.
-const TEAL = [47, 181, 170]; // #2FB5AA
-const OCEAN = [46, 109, 190]; // #2E6DBE
+const TEAL = [47, 181, 170];
+const OCEAN = [46, 109, 190];
 const WHITE = [255, 255, 255];
 const lerp = (a, b, t) => [
   Math.round(a[0] + (b[0] - a[0]) * t),
@@ -18,7 +16,6 @@ const px = Buffer.alloc(SIZE * SIZE * 4);
 for (let y = 0; y < SIZE; y++) {
   for (let x = 0; x < SIZE; x++) {
     const i = (y * SIZE + x) * 4;
-    // diagonal top-left (teal) -> bottom-right (ocean)
     const bg = lerp(TEAL, OCEAN, (x + y) / (2 * (SIZE - 1)));
     let c = bg;
     const inRect = x > 78 && x < 178 && y > 64 && y < 192;
@@ -28,7 +25,7 @@ for (let y = 0; y < SIZE; y++) {
       x > 96 &&
       x < 160;
     if (inRect) c = WHITE;
-    if (inLines) c = TEAL; // document lines in brand teal
+    if (inLines) c = TEAL;
     px[i] = c[0];
     px[i + 1] = c[1];
     px[i + 2] = c[2];

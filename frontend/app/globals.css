@@ -2,10 +2,6 @@
 @theme {
     --font-sans: var(--font-sora), ui-sans-serif, system-ui, sans-serif;
 
-    /* SilkOptima rebrand: remap the accent scales the app uses.
-       violet + indigo -> Teal, blue -> Ocean Blue. Every existing
-       from-violet-500 / text-indigo-600 / bg-blue-500 etc. now renders
-       on-brand automatically. */
     --color-violet-50: #E8F7F6;
     --color-violet-100: #C9EDEA;
     --color-violet-200: #A3E1DC;
@@ -42,14 +38,9 @@
     --color-blue-900: #1B3557;
     --color-blue-950: #122238;
 
-    /* Page background = SilkOptima soft grey-mint (like the Business X-Ray app).
-       Panels stay white / pale-aqua on top of it for the layered look. */
     --color-slate-50: #DCE7E6;
-    /* Headings lean to brand navy. */
     --color-slate-900: #1F2540;
 
-    /* Tighter, more "business" corners across the whole app. rounded-full
-       (pills / circles / avatars) is intentionally left untouched. */
     --radius-lg: 0.375rem;
     --radius-xl: 0.5rem;
     --radius-2xl: 0.625rem;
@@ -121,8 +112,6 @@ body {
     background-color: #bfdbfe !important;
 }
 
-
-/* Let the per-date hover tooltip escape the tile/grid instead of being clipped. */
 
 .react-calendar-custom,
 .react-calendar-custom .react-calendar__viewport,

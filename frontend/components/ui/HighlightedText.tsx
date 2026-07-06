@@ -1,7 +1,6 @@
 "use client";
 import { Fragment, type ReactNode } from "react";
 
-// Merged [start,end) char ranges of every occurrence of every phrase in `text`.
 export function highlightRanges(
   text: string,
   phrases: string[],
@@ -26,8 +25,6 @@ export function highlightRanges(
   return merged;
 }
 
-// Renders `text`, wrapping any occurrence of a highlight phrase in <mark>.
-// When disabled (or no phrases), renders the plain text.
 export default function HighlightedText({
   text,
   phrases,

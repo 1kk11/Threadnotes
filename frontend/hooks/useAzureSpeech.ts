@@ -118,8 +118,6 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
         "Continuous",
       );
 
-      // English only: US English + Indian English. No Hindi/other languages —
-      // everything is transcribed as English.
       const autoDetectSourceLanguageConfig =
         SpeechSDK.AutoDetectSourceLanguageConfig.fromLanguages([
           "en-US",
@@ -151,7 +149,6 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
             ) || "";
         }
         if (!lang) return;
-        // English-only now: show the variant (US / Indian), default English.
         const l = lang.toLowerCase();
         setDetectedLanguage(
           l.startsWith("en-in")
@@ -516,9 +513,6 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
     analyserRef.current = null;
   }, []);
 
-  // Stop the recognizer + recorder, write the recording to disk and remux it to
-  // a playable URL. Does NOT diarize — diarization is now triggered on demand
-  // (via diarizeAudioFile on the returned audioFilePath).
   const finishRecording = useCallback(async (): Promise<any> => {
     finishingRef.current = true;
     if (renewTimerRef.current) {
@@ -616,8 +610,6 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
 
     cleanupStreams();
     mediaRecorderRef.current = null;
-    // Keep audioFilePathRef so diarization can run later on the same finalized
-    // audio. It's reset on the next start()/cancel().
 
     return {
       status: "success",
