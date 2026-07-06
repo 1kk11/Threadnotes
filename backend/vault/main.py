@@ -17,6 +17,7 @@ import jwt
 import httpx
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, EmailStr
 from azure.cosmos import CosmosClient
@@ -33,6 +34,9 @@ COSMOS_ENDPOINT = os.getenv("COSMOS_ENDPOINT")
 COSMOS_KEY = os.getenv("COSMOS_KEY")
 DATABASE_NAME = os.getenv("COSMOS_DATABASE")
 USERS_CONTAINER = os.getenv("COSMOS_USERS_CONTAINER", "users")
+
+ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "").strip()
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
 
 app = FastAPI(
     title="ThreadNotes Cloud Vault",
@@ -176,6 +180,11 @@ class ResetPasswordRequest(BaseModel):
 
 class DeleteAccountRequest(BaseModel):
     confirm_password: str
+
+
+class AdminLogin(BaseModel):
+    email: str
+    password: str
 
 
 OTP_TTL = timedelta(minutes=5)
@@ -546,6 +555,101 @@ def delete_account(
         "message": "Account deleted.",
         "transcripts_deleted": deleted_transcripts,
     }
+
+
+def get_current_admin(
+    creds: HTTPAuthorizationCredentials = Depends(security),
+) -> dict:
+    try:
+        payload = jwt.decode(creds.credentials, SECRET_KEY, algorithms=[ALGORITHM])
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Session expired")
+    except jwt.PyJWTError:
+        raise HTTPException(status_code=401, detail="Invalid authentication token")
+    if not isinstance(payload, dict) or payload.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return payload
+
+
+@app.post("/admin/login")
+def admin_login(req: AdminLogin):
+    if not ADMIN_EMAIL or not ADMIN_PASSWORD:
+        raise HTTPException(
+            status_code=500,
+            detail="Admin login is not configured on the server.",
+        )
+    if (
+        req.email.strip().lower() != ADMIN_EMAIL.lower()
+        or req.password != ADMIN_PASSWORD
+    ):
+        raise HTTPException(status_code=401, detail="Invalid admin credentials")
+    token_data = {
+        "sub": ADMIN_EMAIL,
+        "role": "admin",
+        "exp": datetime.now(timezone.utc) + timedelta(hours=8),
+    }
+    return {
+        "access_token": jwt.encode(token_data, SECRET_KEY, algorithm=ALGORITHM),
+        "token_type": "bearer",
+    }
+
+
+@app.get("/admin/users")
+def admin_list_users(admin: dict = Depends(get_current_admin)):
+    users_cont = get_users_container()
+    rows = list(
+        users_cont.query_items(
+            "SELECT c.id, c.name, c.email, c.createdAt FROM c",
+            enable_cross_partition_query=True,
+        )
+    )
+    rows.sort(key=lambda u: u.get("createdAt") or "", reverse=True)
+    return {"status": "success", "users": rows, "count": len(rows)}
+
+
+@app.delete("/admin/users/{user_id}")
+def admin_delete_user(user_id: str, admin: dict = Depends(get_current_admin)):
+    users_cont = get_users_container()
+    user_list = list(
+        users_cont.query_items(
+            "SELECT * FROM c WHERE c.id = @id",
+            parameters=[{"name": "@id", "value": user_id}],
+            enable_cross_partition_query=True,
+        )
+    )
+    if not user_list:
+        raise HTTPException(status_code=404, detail="User not found")
+    user_doc = user_list[0]
+    email = user_doc.get("email")
+
+    _delete_user_transcripts(email)
+
+    try:
+        props = users_cont.read()
+        pk_path = (props.get("partitionKey", {}).get("paths") or ["/id"])[0]
+        pk_value = user_doc.get(pk_path.strip("/"), user_doc.get("id"))
+        users_cont.delete_item(item=user_doc["id"], partition_key=pk_value)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to delete user: {exc}")
+
+    if email:
+        verified_emails.pop(email, None)
+        otp_storage.pop(email, None)
+        signup_otp_storage.pop(email, None)
+
+    return {"status": "success", "message": "User deleted."}
+
+
+@app.get("/admin")
+def admin_panel():
+    html_path = os.path.join(
+        os.path.dirname(__file__), "..", "admin", "index.html"
+    )
+    if not os.path.exists(html_path):
+        raise HTTPException(status_code=404, detail="Admin panel not found.")
+    return FileResponse(html_path, media_type="text/html")
 
 
 @app.get("/azure/token")
