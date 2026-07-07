@@ -17,7 +17,6 @@ import jwt
 import httpx
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, EmailStr
 from azure.cosmos import CosmosClient
@@ -640,16 +639,6 @@ def admin_delete_user(user_id: str, admin: dict = Depends(get_current_admin)):
         signup_otp_storage.pop(email, None)
 
     return {"status": "success", "message": "User deleted."}
-
-
-@app.get("/admin")
-def admin_panel():
-    html_path = os.path.join(
-        os.path.dirname(__file__), "..", "admin", "index.html"
-    )
-    if not os.path.exists(html_path):
-        raise HTTPException(status_code=404, detail="Admin panel not found.")
-    return FileResponse(html_path, media_type="text/html")
 
 
 @app.get("/azure/token")
