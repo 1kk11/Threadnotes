@@ -10,32 +10,41 @@ services:
     envVars:
       - key: JWT_SECRET
         generateValue: true
+
+      # --- Azure Speech (live transcription tokens) ---
       - key: AZURE_SPEECH_KEY
         sync: false
       - key: AZURE_SPEECH_REGION
-        sync: false
-      # GPT-4o diarization bridge (secrets live ONLY in the vault)
-      - key: OPENAI_API_KEY
+        value: swedencentral
+
+      # --- Azure OpenAI (diarization + transcription proxy) ---
+      - key: AZURE_OPENAI_KEY
         sync: false
       - key: AZURE_OPENAI_ENDPOINT
         sync: false
-      - key: AZURE_OPENAI_KEY
-        sync: false
       - key: AZURE_OPENAI_API_VERSION
-        sync: false
+        value: 2025-04-01-preview
       - key: AZURE_DIARIZE_DEPLOYMENT
-        sync: false
-      # Cosmos DB (auth + transcript persistence)
+        value: gpt-4o-transcribe-diarize
+      - key: AZURE_TRANSCRIBE_DEPLOYMENT
+        value: gpt-4o-transcribe
+
+      # --- Azure Cosmos DB (user accounts) ---
       - key: COSMOS_ENDPOINT
         sync: false
       - key: COSMOS_KEY
         sync: false
       - key: COSMOS_DATABASE
         sync: false
-      # Gmail OTP (signup / password reset) now uses the Gmail API via OAuth
-      # secret files (credentials.json / token.json), NOT SMTP env vars.
-      # Optional overrides for where those files are mounted:
-      # - key: GMAIL_CREDENTIALS_PATH
-      #   sync: false
-      # - key: GMAIL_TOKEN_PATH
-      #   sync: false
+      - key: COSMOS_USERS_CONTAINER
+        value: users
+
+      # --- Gmail OTP (From address; OAuth creds live in credentials.json / token.json) ---
+      - key: GMAIL_SENDER
+        sync: false
+
+      # --- Admin web panel credentials ---
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
