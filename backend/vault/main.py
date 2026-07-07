@@ -967,7 +967,11 @@ async def diarize_stream(
 
 def _run_transcription(audio_bytes: bytes, filename: str, content_type: str = "") -> str:
     client = build_openai_client()
-    deployment = os.getenv("AZURE_WHISPER_DEPLOYMENT", "whisper").strip()
+    deployment = (
+        os.getenv("AZURE_TRANSCRIBE_DEPLOYMENT")
+        or os.getenv("AZURE_WHISPER_DEPLOYMENT")
+        or "gpt-4o-transcribe"
+    ).strip()
     safe_name = filename or "audio.ogg"
     mime = content_type or "audio/ogg"
     resp = client.audio.transcriptions.create(
