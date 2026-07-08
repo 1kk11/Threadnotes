@@ -73,11 +73,13 @@ export function loadMeetings(): StoredMeeting[] {
 export function saveMeetings(meetings: StoredMeeting[]): void {
   if (typeof window === "undefined") return;
   localStorage.setItem(storageKey(), JSON.stringify(meetings));
+  // Notify listeners (e.g. the sidebar meetings count) on EVERY write — add,
+  // update AND delete — so the count stays live.
+  window.dispatchEvent(new Event(MEETINGS_EVENT));
 }
 
 export function addMeeting(meeting: StoredMeeting): void {
   saveMeetings([meeting, ...loadMeetings()]);
-  window.dispatchEvent(new Event(MEETINGS_EVENT));
 }
 
 export function updateMeeting(
@@ -88,7 +90,6 @@ export function updateMeeting(
     m.id === id ? { ...m, ...patch } : m,
   );
   saveMeetings(updated);
-  window.dispatchEvent(new Event(MEETINGS_EVENT));
 }
 
 export function clearMeetings(): void {

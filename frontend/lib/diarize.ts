@@ -88,34 +88,53 @@ export async function transcribeAudioFile(
     throw new Error("Audio processing is only available in the desktop app.");
   }
 
-  const { chunks, mimeType } =
-    await electron.audioCompressAndRead(audioFilePath);
+  // gpt-4o-transcribe has a small audio-token limit, so transcription uses much
+  // shorter chunks (5 min) than diarization (which keeps the large default).
+  const { chunks, mimeType } = await electron.audioCompressAndRead(
+    audioFilePath,
+    300,
+  );
 
-  opts.onProgress?.(0, chunks.length);
+  const total = chunks.length;
+  const parts: string[] = new Array(total).fill("");
+  let done = 0;
+  opts.onProgress?.(0, total);
 
-  const parts: string[] = [];
-  for (let i = 0; i < chunks.length; i++) {
-    const { buffer, name } = chunks[i];
-    const form = new FormData();
-    form.append("file", new Blob([buffer], { type: mimeType }), name);
+  // Transcription chunks are independent (just text, no cross-chunk speaker
+  // identity), so we run them in parallel with a small worker pool for speed.
+  // Results are stored by index to preserve order when stitched.
+  const CONCURRENCY = Math.min(4, total || 1);
+  let nextIndex = 0;
 
-    const res = await fetch(`${API_URL}/transcribe/stream`, {
-      method: "POST",
-      headers: opts.jwt ? { Authorization: `Bearer ${opts.jwt}` } : undefined,
-      body: form,
-      signal: opts.signal,
-    });
-    const result = await res.json();
-    if (!res.ok || result.status === "error") {
-      throw new Error(
-        result.detail ||
-          result.message ||
-          `Transcription failed on part ${i + 1}: ${res.status}`,
-      );
+  const worker = async () => {
+    while (true) {
+      const i = nextIndex++;
+      if (i >= total) break;
+      const { buffer, name } = chunks[i];
+      const form = new FormData();
+      form.append("file", new Blob([buffer], { type: mimeType }), name);
+
+      const res = await fetch(`${API_URL}/transcribe/stream`, {
+        method: "POST",
+        headers: opts.jwt ? { Authorization: `Bearer ${opts.jwt}` } : undefined,
+        body: form,
+        signal: opts.signal,
+      });
+      const result = await res.json();
+      if (!res.ok || result.status === "error") {
+        throw new Error(
+          result.detail ||
+            result.message ||
+            `Transcription failed on part ${i + 1}: ${res.status}`,
+        );
+      }
+      parts[i] = result.text ? String(result.text).trim() : "";
+      done += 1;
+      opts.onProgress?.(done, total);
     }
-    if (result.text) parts.push(String(result.text).trim());
-    opts.onProgress?.(i + 1, chunks.length);
-  }
+  };
+
+  await Promise.all(Array.from({ length: CONCURRENCY }, () => worker()));
 
   return parts.filter(Boolean).join("\n\n");
 }

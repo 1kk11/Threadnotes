@@ -68,7 +68,7 @@ function getFfmpegPath() {
     return _ffmpegPathCache;
 }
 
-function runFfmpeg(args) {
+function runFfmpeg(args, onProgress) {
     const ffmpegPath = getFfmpegPath();
     return new Promise((resolve, reject) => {
         let proc;
@@ -80,8 +80,28 @@ function runFfmpeg(args) {
             );
         }
         let stderr = "";
+        let durationSec = 0;
         proc.stderr.on("data", (d) => {
-            stderr += d.toString();
+            const chunk = d.toString();
+            stderr += chunk;
+            // Real progress: parse total Duration once, then each time= update.
+            if (onProgress) {
+                if (!durationSec) {
+                    const dm = /Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/.exec(stderr);
+                    if (dm) {
+                        durationSec =
+                            (+dm[1]) * 3600 + (+dm[2]) * 60 + parseFloat(dm[3]);
+                    }
+                }
+                const tm = /time=(\d+):(\d+):(\d+(?:\.\d+)?)/.exec(chunk);
+                if (tm && durationSec > 0) {
+                    const t = (+tm[1]) * 3600 + (+tm[2]) * 60 + parseFloat(tm[3]);
+                    const pct = Math.min(99, Math.round((t / durationSec) * 100));
+                    try {
+                        onProgress(pct);
+                    } catch {}
+                }
+            }
         });
         proc.on("error", (e) =>
             reject(new Error(`FFmpeg spawn error ("${ffmpegPath}"): ${e.message}`)),
@@ -756,6 +776,36 @@ ipcMain.handle("audio-file-close", async(_event, filePath) => {
     });
 });
 
+// Persist an UPLOADED file's audio into the recordings dir as a small ogg and
+// return a durable media:// URL (so the audio plays in MyMeetings later).
+// Unlike remux-audio (live webm only) this auto-detects the input format.
+ipcMain.handle("persist-upload-audio", async(event, filePath) => {
+    if (!filePath || !fs.existsSync(filePath)) {
+        throw new Error(`Upload file not found: ${filePath}`);
+    }
+    const recordingsDir = getRecordingsDirectory();
+    const fileName = `upload-${Date.now()}.ogg`;
+    const outputPath = path.join(recordingsDir, fileName);
+    await runFfmpeg(
+        [
+            "-y",
+            "-i", filePath,
+            "-vn", "-c:a", "libopus", "-b:a", "32k",
+            outputPath,
+        ],
+        (pct) => {
+            try {
+                event.sender.send("upload-progress", pct);
+            } catch {}
+        },
+    );
+    return {
+        outputPath,
+        fileName,
+        mediaUrl: `${MEDIA_SCHEME}://${MEDIA_HOST}/${encodeURIComponent(fileName)}`,
+    };
+});
+
 ipcMain.handle("remux-audio", async(_event, filePath) => {
     if (!filePath || !fs.existsSync(filePath)) {
         throw new Error(`Recording file not found for remux: ${filePath}`);
@@ -788,13 +838,18 @@ ipcMain.handle("remux-audio", async(_event, filePath) => {
 
 const SEGMENT_SECONDS = 1400;
 
-ipcMain.handle("audio-compress-and-read", async(_event, filePath) => {
+ipcMain.handle("audio-compress-and-read", async(_event, filePath, segmentSeconds) => {
     if (!filePath || !fs.existsSync(filePath)) {
         throw new Error(`Recording file not found: ${filePath}`);
     }
     if (fs.statSync(filePath).size === 0) {
         throw new Error(`Recording file is empty (0 bytes): ${filePath}`);
     }
+
+    // Chunk length: diarize can take large chunks; gpt-4o-transcribe has a much
+    // smaller audio-token limit, so transcription passes a shorter value.
+    const seg =
+        Number(segmentSeconds) > 0 ? Number(segmentSeconds) : SEGMENT_SECONDS;
 
     const dir = path.dirname(filePath);
     const base = path.basename(filePath).replace(/\.[^.]+$/, "");
@@ -810,7 +865,7 @@ ipcMain.handle("audio-compress-and-read", async(_event, filePath) => {
         ...(isWebm && !recover ? ["-f", "webm"] : []),
         "-i", filePath,
         "-vn", "-ar", "16000", "-ac", "1", "-c:a", "libopus", "-b:a", "24k",
-        "-f", "segment", "-segment_time", String(SEGMENT_SECONDS),
+        "-f", "segment", "-segment_time", String(seg),
         outPattern,
     ];
 
@@ -859,7 +914,7 @@ ipcMain.handle("audio-compress-and-read", async(_event, filePath) => {
             "FFmpeg produced no usable audio chunks — the recording may be empty or corrupt.",
         );
     }
-    return { chunks, segmentSeconds: SEGMENT_SECONDS, mimeType: "audio/ogg" };
+    return { chunks, segmentSeconds: seg, mimeType: "audio/ogg" };
 });
 
 ipcMain.handle("get-desktop-source-id", async() => {

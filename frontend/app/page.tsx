@@ -46,7 +46,7 @@ export default function Home() {
       setBooting(false);
     };
 
-    const t = setTimeout(decide, 700);
+    const t = setTimeout(decide, 2000);
     return () => clearTimeout(t);
   }, [router]);
 

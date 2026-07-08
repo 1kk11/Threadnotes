@@ -22,7 +22,7 @@ import {
   MEETINGS_EVENT,
 } from "@/lib/meetingStore";
 import { getUserName, clearSession } from "@/lib/auth";
-import { diarizeAudioFile } from "@/lib/diarize";
+import { diarizeAudioFile, transcribeAudioFile } from "@/lib/diarize";
 import ConfirmModal from "@/components/ui/ConfirmModal";
 import ScrollNav from "@/components/ui/ScrollNav";
 import AudioPlayer from "@/components/ui/AudioPlayer";
@@ -99,6 +99,10 @@ export default function Dashboard() {
   const [mergedTranscript, setMergedTranscript] = useState<MergedTranscriptRow[]>([]);
   const [isDiarizing, setIsDiarizing] = useState(false);
   const [diarizeProgress, setDiarizeProgress] = useState(0);
+  // "Finishing recording" progress (stop → write → ready), so the user sees when
+  // the transcript + audio will appear.
+  const [isFinishing, setIsFinishing] = useState(false);
+  const [finishProgress, setFinishProgress] = useState(0);
   const [transcriptView, setTranscriptView] = useState<"transcript" | "diarize">(
     "transcript",
   );
@@ -482,10 +486,17 @@ export default function Dashboard() {
     setTranscriptView("transcript");
     setMergedTranscript([]);
     setIsSaved(false);
+    setIsFinishing(true);
+    setFinishProgress(5);
     setStatusMessage("Finishing recording...");
     try {
-      const result = await finishRecording();
+      const result = await finishRecording((p: number) => {
+        if (sid === sessionIdRef.current) {
+          setFinishProgress(Math.max(5, Math.round(p * 100)));
+        }
+      });
       if (sid !== sessionIdRef.current) return;
+      // Audio shows immediately (reliable blob URL) — no ffmpeg wait.
       if (result?.audioUrl) {
         setCurrentAudioTime(0);
         setAudioUrl((prev) => {
@@ -494,11 +505,15 @@ export default function Dashboard() {
         });
       }
       if (result?.audioFilePath) setAudioFilePath(result.audioFilePath);
+      setFinishProgress(100);
+      setIsFinishing(false);
       setStatusMessage(
         "Transcript ready — click Diarize to separate speakers, or Save.",
       );
     } catch (e: any) {
       if (sid !== sessionIdRef.current) return;
+      setIsFinishing(false);
+      setFinishProgress(0);
       const path = getRecordingFilePath();
       if (path) setAudioFilePath(path);
       setStatusMessage("⚠️ Could not finalize the recording");
@@ -569,15 +584,6 @@ export default function Dashboard() {
 
   const handleProcessUpload = useCallback(async () => {
     if (!uploadFile) return;
-    // Cancel any previous in-flight upload/diarization and invalidate its async
-    // callbacks, so a stale result can never clobber this new file (which caused
-    // the transcript to mismatch the audio and the status to stick).
-    if (uploadAbortRef.current) {
-      try {
-        uploadAbortRef.current.abort();
-      } catch {}
-      uploadAbortRef.current = null;
-    }
     sessionIdRef.current += 1;
     const sid = sessionIdRef.current;
     clearPlayback();
@@ -585,96 +591,80 @@ export default function Dashboard() {
     setInterim("");
     setMergedTranscript([]);
     setIsSaved(false);
-    // Uploads run through the SAME diarize UI as everything else — clicking
-    // Process starts diarization immediately with the real diarize progress bar
-    // (no separate "Uploading…" state, no clickable Diarize button to re-run).
-    setIsDiarizing(true);
-    setDiarizeProgress(2);
-    setStatusMessage("Separating speakers…");
-
-    const abort = new AbortController();
-    uploadAbortRef.current = abort;
+    setIsUploading(true);
+    setUploadProgress(0);
+    setTranscriptView("transcript");
+    setStatusMessage("Uploading file…");
 
     const token = localStorage.getItem("token");
     const electron =
       typeof window !== "undefined" ? window.electronAPI : undefined;
     const localPath = electron?.getPathForFile?.(uploadFile) || "";
     setAudioFilePath(localPath || null);
-
-    const playbackUrl = URL.createObjectURL(uploadFile);
     setCurrentAudioTime(0);
-    setAudioUrl(playbackUrl);
-
-    const applyDiarized = (rows: MergedTranscriptRow[]) => {
-      if (sid !== sessionIdRef.current) return;
-      stopSmoothProgress();
-      setIsDiarizing(false);
-      setDiarizeProgress(0);
-      setMergedTranscript(rows);
-      setLines([]);
-      setTranscriptView("diarize");
-      setActiveTab("live");
-      setStatusMessage(
-        rows.length
-          ? "Analysis ready!"
-          : "No speech detected in the uploaded file.",
-      );
-      if (rows.length) void saveTranscriptLocally(rows);
-    };
 
     try {
-      if (electron?.audioCompressAndRead && localPath) {
-        const rows = (await diarizeAudioFile(localPath, {
-          jwt: token,
-          signal: abort.signal,
-          onProgress: handleDiarizeProgress,
-        })) as MergedTranscriptRow[];
-        if (sid !== sessionIdRef.current) return;
-        applyDiarized(rows);
-        return;
+      if (!electron?.audioCompressAndRead || !localPath) {
+        throw new Error("Audio processing is only available in the desktop app.");
       }
 
-      handleDiarizeProgress(0, 1);
-      const form = new FormData();
-      form.append("file", uploadFile);
-      const res = await fetch(`${API_URL}/diarize/stream`, {
-        method: "POST",
-        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-        body: form,
-        signal: abort.signal,
-      });
-      const data = await res.json();
-      if (sid !== sessionIdRef.current) return;
-      if (!res.ok || data.status === "error") {
-        stopSmoothProgress();
-        setIsDiarizing(false);
-        setDiarizeProgress(0);
-        setStatusMessage(
-          data.detail || data.message || "Failed to process file.",
-        );
-        return;
+      // Phase 1 — Uploading: persist a durable media:// audio (also plays in
+      // MyMeetings). Real ffmpeg progress streamed to the bar.
+      const unsub = electron.onUploadProgress
+        ? electron.onUploadProgress((pct) => {
+            if (sid === sessionIdRef.current) setUploadProgress(pct);
+          })
+        : undefined;
+      let mediaUrl: string | null = null;
+      try {
+        mediaUrl = electron.persistUploadAudio
+          ? await electron
+              .persistUploadAudio(localPath)
+              .then((r) => r.mediaUrl)
+              .catch(() => null)
+          : null;
+      } finally {
+        unsub?.();
       }
-      applyDiarized(
-        Array.isArray(data.segments)
-          ? (data.segments as MergedTranscriptRow[])
-          : [],
+      if (sid !== sessionIdRef.current) return;
+      setUploadProgress(100);
+      setStatusMessage("Upload file completed");
+      // Brief pause so the user sees the upload finished, then auto-transcribe.
+      await new Promise((r) => setTimeout(r, 2000));
+      if (sid !== sessionIdRef.current) return;
+
+      // Phase 2 — Transcribing: parallel chunks, real per-chunk progress.
+      setUploadProgress(0);
+      setStatusMessage("Transcribing…");
+      const text = await transcribeAudioFile(localPath, {
+        jwt: token,
+        onProgress: (doneN, total) => {
+          if (total > 0 && sid === sessionIdRef.current) {
+            setUploadProgress(Math.round((doneN / total) * 100));
+          }
+        },
+      });
+      if (sid !== sessionIdRef.current) return;
+
+      setAudioUrl(mediaUrl || URL.createObjectURL(uploadFile));
+      setLines(text.trim() ? [text.trim()] : []);
+      setMergedTranscript([]);
+      setTranscriptView("transcript");
+      setActiveTab("live");
+      setIsUploading(false);
+      setUploadProgress(0);
+      setStatusMessage(
+        text.trim()
+          ? "Transcript ready — click Diarize to separate speakers."
+          : "No speech detected in the uploaded file.",
       );
     } catch (e: any) {
-      if (e?.name === "AbortError" || sid !== sessionIdRef.current) return;
-      stopSmoothProgress();
-      setIsDiarizing(false);
-      setDiarizeProgress(0);
+      if (sid !== sessionIdRef.current) return;
+      setIsUploading(false);
+      setUploadProgress(0);
       setStatusMessage(e?.message || "Could not process the file.");
-    } finally {
-      if (uploadAbortRef.current === abort) uploadAbortRef.current = null;
     }
-  }, [
-    uploadFile,
-    clearPlayback,
-    saveTranscriptLocally,
-    handleDiarizeProgress,
-    stopSmoothProgress,
-  ]);
+  }, [uploadFile, clearPlayback]);
 
   const handleSaveTranscript = useCallback(async () => {
     if (!transcriptText.trim() && mergedTranscript.length === 0) return;
@@ -744,6 +734,24 @@ export default function Dashboard() {
             }))
           : undefined;
       const recordedPath = audioFilePath || getRecordingFilePath();
+      // Playback audio is a blob during the session; on save, remux the raw file
+      // to a durable media:// URL so it also plays back in MyMeetings.
+      let audioMediaUrl =
+        audioUrl && audioUrl.startsWith("media://") ? audioUrl : undefined;
+      if (
+        !audioMediaUrl &&
+        recordedPath &&
+        typeof window !== "undefined" &&
+        window.electronAPI?.remuxAudio
+      ) {
+        try {
+          const { mediaUrl } =
+            await window.electronAPI.remuxAudio(recordedPath);
+          audioMediaUrl = mediaUrl;
+        } catch {
+          audioMediaUrl = undefined;
+        }
+      }
       const record = {
         id: Date.now().toString(),
         topic: savedName || `Meeting on ${firstWords}`,
@@ -754,8 +762,7 @@ export default function Dashboard() {
         plainText: transcriptText,
         diarized,
         audioPath: recordedPath || undefined,
-        audioMediaUrl:
-          audioUrl && audioUrl.startsWith("media://") ? audioUrl : undefined,
+        audioMediaUrl,
         highlights: highlights.length ? highlights : undefined,
         highlightsShown: showHighlights,
       };
@@ -1012,6 +1019,8 @@ export default function Dashboard() {
                   systemStatus={systemStatus}
                   isDiarizing={isDiarizing}
                   diarizeProgress={diarizeProgress}
+                  isFinishing={isFinishing}
+                  finishProgress={finishProgress}
                   isCompleted={
                     !isRecording &&
                     !isDiarizing &&
@@ -1144,21 +1153,62 @@ export default function Dashboard() {
                         </p>
                       ) : !highlightsOnly && transcriptView === "transcript" ? (
                         <div className="whitespace-pre-wrap text-[15px] leading-relaxed text-slate-700">
-                          {transcriptText || mergedTranscript.length ? (
-                            <HighlightedText
-                              text={
-                                mergedTranscript.length
-                                  ? mergedTranscript
-                                      .map((r) => stripSpeakerPrefix(r.text))
-                                      .join("\n\n")
-                                  : transcriptText
+                          {(() => {
+                            // Karaoke in transcript view too: if diarized words
+                            // exist, flatten them and highlight the spoken word.
+                            const allWords = mergedTranscript.flatMap(
+                              (r) => r.words ?? [],
+                            );
+                            if (allWords.length > 0) {
+                              const rowText = allWords
+                                .map((w) => w.word)
+                                .join(" ");
+                              const hlRanges =
+                                showHighlights && highlights.length
+                                  ? highlightRanges(rowText, highlights)
+                                  : [];
+                              const wordStarts: number[] = [];
+                              let acc = 0;
+                              for (const w of allWords) {
+                                wordStarts.push(acc);
+                                acc += w.word.length + 1;
                               }
-                              phrases={highlights}
-                              enabled={showHighlights}
-                            />
-                          ) : (
-                            "No transcript captured."
-                          )}
+                              return allWords.map((w, wi) => {
+                                const isActive =
+                                  currentAudioTime >= w.start &&
+                                  currentAudioTime < w.end;
+                                const wStart = wordStarts[wi];
+                                const wEnd = wStart + w.word.length;
+                                const isHl = hlRanges.some(
+                                  ([s, e]) => wStart < e && wEnd > s,
+                                );
+                                return (
+                                  <span
+                                    key={wi}
+                                    ref={isActive ? activeWordRef : null}
+                                    className={
+                                      isActive
+                                        ? "rounded-md bg-indigo-100 px-1 py-0.5 font-bold text-indigo-700 shadow-sm ring-1 ring-indigo-200 transition-all duration-150"
+                                        : isHl
+                                          ? "rounded bg-amber-200/70 px-0.5 transition-all duration-150"
+                                          : "transition-all duration-150"
+                                    }
+                                  >
+                                    {w.word}{" "}
+                                  </span>
+                                );
+                              });
+                            }
+                            return transcriptText ? (
+                              <HighlightedText
+                                text={transcriptText}
+                                phrases={highlights}
+                                enabled={showHighlights}
+                              />
+                            ) : (
+                              "No transcript captured."
+                            );
+                          })()}
                         </div>
                       ) : !highlightsOnly && mergedEditMode ? (
                         <textarea

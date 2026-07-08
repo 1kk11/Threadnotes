@@ -513,110 +513,95 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
     analyserRef.current = null;
   }, []);
 
-  const finishRecording = useCallback(async (): Promise<any> => {
-    finishingRef.current = true;
-    if (renewTimerRef.current) {
-      clearInterval(renewTimerRef.current);
-      renewTimerRef.current = null;
-    }
-
-    await new Promise<void>((resolve) => {
-      const r = recognizerRef.current;
-      if (!r) return resolve();
-      r.stopContinuousRecognitionAsync(
-        () => {
-          r.close();
-          resolve();
-        },
-        () => resolve(),
-      );
-    });
-    recognizerRef.current = null;
-
-    await new Promise<void>((resolve) => {
-      const recorder = mediaRecorderRef.current;
-      if (!recorder || recorder.state === "inactive") return resolve();
-      console.log(
-        "[Recorder] stopping MediaRecorder — state before stop:",
-        recorder.state,
-      );
-      let settled = false;
-      const done = () => {
-        if (settled) return;
-        settled = true;
-        console.log("[Recorder] MediaRecorder onstop fired.");
-        resolve();
-      };
-      recorder.onstop = done;
-      setTimeout(done, 4000);
-      try {
-        recorder.stop();
-      } catch (err) {
-        console.warn("[Recorder] recorder.stop() threw:", err);
-        done();
+  const finishRecording = useCallback(
+    async (onProgress?: (p: number) => void): Promise<any> => {
+      finishingRef.current = true;
+      if (renewTimerRef.current) {
+        clearInterval(renewTimerRef.current);
+        renewTimerRef.current = null;
       }
-    });
+      onProgress?.(0.15);
 
-    let audioFilePath: string | null = null;
-    const recordedChunks = recordedChunksRef.current;
-    const recordedBlob =
-      recordedChunks.length > 0
-        ? new Blob(recordedChunks, {
-            type: mediaRecorderRef.current?.mimeType || "audio/webm",
-          })
-        : null;
-    console.log(
-      `[Recorder] finishing — buffered chunks: ${recordedChunks.length}, blob size: ${
-        recordedBlob?.size ?? 0
-      } bytes`,
-    );
-
-    let playbackUrl: string | null = null;
-
-    if (
-      recordedBlob &&
-      recordedBlob.size > 0 &&
-      typeof window !== "undefined" &&
-      window.electronAPI?.audioFileCreate
-    ) {
-      try {
-        audioFilePath = await window.electronAPI.audioFileCreate();
-        const arrayBuffer = await recordedBlob.arrayBuffer();
-        await window.electronAPI.audioFileAppend(audioFilePath, arrayBuffer);
-        await window.electronAPI.audioFileClose(audioFilePath);
-        audioFilePathRef.current = audioFilePath;
-        console.log(
-          `[Recorder] wrote complete recording (${arrayBuffer.byteLength} bytes) → ${audioFilePath}`,
+      await new Promise<void>((resolve) => {
+        const r = recognizerRef.current;
+        if (!r) return resolve();
+        r.stopContinuousRecognitionAsync(
+          () => {
+            r.close();
+            resolve();
+          },
+          () => resolve(),
         );
-      } catch (error) {
-        console.warn("[Recorder] Failed to write recording file:", error);
-        audioFilePath = null;
+      });
+      recognizerRef.current = null;
+      onProgress?.(0.4);
+
+      await new Promise<void>((resolve) => {
+        const recorder = mediaRecorderRef.current;
+        if (!recorder || recorder.state === "inactive") return resolve();
+        let settled = false;
+        const done = () => {
+          if (settled) return;
+          settled = true;
+          resolve();
+        };
+        recorder.onstop = done;
+        setTimeout(done, 4000);
+        try {
+          recorder.stop();
+        } catch {
+          done();
+        }
+      });
+      onProgress?.(0.6);
+
+      let audioFilePath: string | null = null;
+      const recordedChunks = recordedChunksRef.current;
+      const recordedBlob =
+        recordedChunks.length > 0
+          ? new Blob(recordedChunks, {
+              type: mediaRecorderRef.current?.mimeType || "audio/webm",
+            })
+          : null;
+
+      // INSTANT, reliable playback URL from the recorded blob — no ffmpeg on the
+      // critical path (remux was the flaky/slow step that made audio late/absent).
+      const playbackUrl =
+        recordedBlob && recordedBlob.size > 0
+          ? URL.createObjectURL(recordedBlob)
+          : null;
+      onProgress?.(0.75);
+
+      // Write the raw file for diarization + a durable remux later (on save).
+      if (
+        recordedBlob &&
+        recordedBlob.size > 0 &&
+        typeof window !== "undefined" &&
+        window.electronAPI?.audioFileCreate
+      ) {
+        try {
+          audioFilePath = await window.electronAPI.audioFileCreate();
+          const arrayBuffer = await recordedBlob.arrayBuffer();
+          await window.electronAPI.audioFileAppend(audioFilePath, arrayBuffer);
+          await window.electronAPI.audioFileClose(audioFilePath);
+          audioFilePathRef.current = audioFilePath;
+        } catch {
+          audioFilePath = null;
+        }
       }
-    } else {
-      console.warn(
-        "[Recorder] No audio captured — nothing to save or diarize.",
-      );
-    }
+      onProgress?.(1);
 
-    if (audioFilePath && typeof window !== "undefined" && window.electronAPI?.remuxAudio) {
-      try {
-        const { mediaUrl } = await window.electronAPI.remuxAudio(audioFilePath);
-        playbackUrl = mediaUrl;
-        console.log("[Recorder] remux complete — playback URL:", playbackUrl);
-      } catch (error) {
-        console.warn("[Recorder] Remux failed — playback unavailable:", error);
-      }
-    }
+      cleanupStreams();
+      mediaRecorderRef.current = null;
 
-    cleanupStreams();
-    mediaRecorderRef.current = null;
-
-    return {
-      status: "success",
-      audioUrl: playbackUrl,
-      audioFilePath,
-    };
-  }, [cleanupStreams]);
+      return {
+        status: "success",
+        audioUrl: playbackUrl,
+        audioFilePath,
+      };
+    },
+    [cleanupStreams],
+  );
 
   const getRecordingFilePath = useCallback(
     () => audioFilePathRef.current,

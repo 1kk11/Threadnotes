@@ -2,7 +2,7 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import Calendar from "react-calendar";
 import "react-calendar/dist/Calendar.css";
-import { Download, CalendarDays, Clock, Highlighter } from "lucide-react";
+import { Download, CalendarDays, Clock, Highlighter, Copy } from "lucide-react";
 import HighlightedText, {
   highlightRanges,
 } from "@/components/ui/HighlightedText";
@@ -177,6 +177,21 @@ export default function MyMeetings() {
     } catch {
       return false;
     }
+  };
+
+  // Copy the open view: diarize -> "Speaker: text" blocks (with speakers, no
+  // title); transcript -> the full plain text.
+  const handleCopy = async () => {
+    if (!selectedMeeting) return;
+    let text = "";
+    if (detailView === "diarize") {
+      const rows = getDiarizedRows(selectedMeeting) ?? [];
+      text = rows.map((r) => `${r.speaker}: ${r.text}`).join("\n\n");
+    } else {
+      text = getPlainText(selectedMeeting);
+    }
+    const ok = await copyToClipboard(text.trim());
+    showToast(ok ? "Copied to clipboard" : "Copy failed");
   };
 
   const handleExport = async (meeting: Meeting) => {
@@ -778,6 +793,14 @@ export default function MyMeetings() {
                   </button>
                 )}
                 <button
+                  onClick={handleCopy}
+                  className="p-2 text-white/80 hover:bg-white/20 hover:text-white rounded-full transition-colors"
+                  title="Copy content"
+                  aria-label="Copy content"
+                >
+                  <Copy className="w-5 h-5" />
+                </button>
+                <button
                   onClick={() => handleExport(selectedMeeting)}
                   className="p-2 text-white/80 hover:bg-white/20 hover:text-white rounded-full transition-colors"
                   title="Export transcript"
@@ -866,11 +889,59 @@ export default function MyMeetings() {
                 </p>
               ) : !mtgHighlightsOnly && detailView === "transcript" ? (
                 <div className="whitespace-pre-wrap leading-relaxed">
-                  <HighlightedText
-                    text={getPlainText(selectedMeeting)}
-                    phrases={mtgHighlights}
-                    enabled={mtgShowHighlights}
-                  />
+                  {(() => {
+                    // Karaoke in transcript view too: flatten the diarized words
+                    // (with their timings) into one stream and highlight the word
+                    // being spoken. Falls back to plain text if no word timings.
+                    const rows = getDiarizedRows(selectedMeeting);
+                    const allWords = rows
+                      ? rows.flatMap((r) => r.words ?? [])
+                      : [];
+                    if (allWords.length === 0) {
+                      return (
+                        <HighlightedText
+                          text={getPlainText(selectedMeeting)}
+                          phrases={mtgHighlights}
+                          enabled={mtgShowHighlights}
+                        />
+                      );
+                    }
+                    const rowText = allWords.map((w) => w.word).join(" ");
+                    const hlRanges =
+                      mtgShowHighlights && mtgHighlights.length
+                        ? highlightRanges(rowText, mtgHighlights)
+                        : [];
+                    const wordStarts: number[] = [];
+                    let acc = 0;
+                    for (const w of allWords) {
+                      wordStarts.push(acc);
+                      acc += w.word.length + 1;
+                    }
+                    return allWords.map((w, wi) => {
+                      const isActive =
+                        mtgAudioTime >= w.start && mtgAudioTime < w.end;
+                      const wStart = wordStarts[wi];
+                      const wEnd = wStart + w.word.length;
+                      const isHl = hlRanges.some(
+                        ([s, e]) => wStart < e && wEnd > s,
+                      );
+                      return (
+                        <span
+                          key={wi}
+                          data-active-word={isActive ? "" : undefined}
+                          className={
+                            isActive
+                              ? "rounded-md bg-indigo-100 px-1 py-0.5 font-bold text-indigo-700 ring-1 ring-indigo-200 transition-all duration-150"
+                              : isHl
+                                ? "rounded bg-amber-200/70 px-0.5 transition-all duration-150"
+                                : "transition-all duration-150"
+                          }
+                        >
+                          {w.word}{" "}
+                        </span>
+                      );
+                    });
+                  })()}
                 </div>
               ) : (
                 (() => {

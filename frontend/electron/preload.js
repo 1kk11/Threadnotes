@@ -44,7 +44,14 @@ contextBridge.exposeInMainWorld("electronAPI", {
     audioFileAppend: (filePath, chunk) =>
         ipcRenderer.invoke("audio-file-append", filePath, chunk),
     audioFileClose: (filePath) => ipcRenderer.invoke("audio-file-close", filePath),
-    audioCompressAndRead: (filePath) =>
-        ipcRenderer.invoke("audio-compress-and-read", filePath),
+    audioCompressAndRead: (filePath, segmentSeconds) =>
+        ipcRenderer.invoke("audio-compress-and-read", filePath, segmentSeconds),
     remuxAudio: (filePath) => ipcRenderer.invoke("remux-audio", filePath),
+    persistUploadAudio: (filePath) =>
+        ipcRenderer.invoke("persist-upload-audio", filePath),
+    onUploadProgress: (callback) => {
+        const listener = (_e, pct) => callback(pct);
+        ipcRenderer.on("upload-progress", listener);
+        return () => ipcRenderer.removeListener("upload-progress", listener);
+    },
 });

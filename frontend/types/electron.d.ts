@@ -51,6 +51,7 @@ declare global {
     audioFileClose: (filePath: string) => Promise<boolean>;
     audioCompressAndRead: (
       filePath: string,
+      segmentSeconds?: number,
     ) => Promise<{
       chunks: { buffer: ArrayBuffer; name: string }[];
       segmentSeconds: number;
@@ -59,6 +60,10 @@ declare global {
     remuxAudio: (
       filePath: string,
     ) => Promise<{ outputPath: string; fileName: string; mediaUrl: string }>;
+    persistUploadAudio: (
+      filePath: string,
+    ) => Promise<{ outputPath: string; fileName: string; mediaUrl: string }>;
+    onUploadProgress: (callback: (pct: number) => void) => () => void;
   }
 
   interface Window {

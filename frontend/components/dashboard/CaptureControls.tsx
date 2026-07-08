@@ -29,6 +29,8 @@ type CaptureControlsProps = {
   systemStatus: string;
   isDiarizing?: boolean;
   diarizeProgress?: number;
+  isFinishing?: boolean;
+  finishProgress?: number;
   isCompleted?: boolean;
   onStart: () => void;
   onPause: () => void;
@@ -58,6 +60,8 @@ export default function CaptureControls({
   systemStatus,
   isDiarizing = false,
   diarizeProgress = 0,
+  isFinishing = false,
+  finishProgress = 0,
   isCompleted = false,
   onStart,
   onPause,
@@ -101,10 +105,12 @@ export default function CaptureControls({
         </p>
         <p
           className={`mt-1 text-lg font-bold ${
-            isActive || isDiarizing ? "text-violet-600" : "text-slate-800"
+            isActive || isDiarizing || isUploading
+              ? "text-violet-600"
+              : "text-slate-800"
           }`}
         >
-          {isUploading ? "Uploading..." : systemStatus}
+          {systemStatus}
         </p>
 
         {isDiarizing && (
@@ -122,6 +128,50 @@ export default function CaptureControls({
                 className="h-full rounded-full bg-linear-to-r from-violet-500 to-blue-500 transition-all duration-300 ease-out"
                 style={{
                   width: `${Math.min(100, Math.max(0, diarizeProgress))}%`,
+                }}
+              />
+            </div>
+          </div>
+        )}
+
+        {isFinishing && (
+          <div className="mt-3">
+            <div className="mb-1 flex items-center justify-between">
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-violet-500">
+                Finishing
+              </span>
+              <span className="font-mono text-xs font-bold tabular-nums text-slate-600">
+                {Math.round(Math.min(100, Math.max(0, finishProgress)))}%
+              </span>
+            </div>
+            <div className="h-2 w-full overflow-hidden rounded-full bg-slate-200/70">
+              <div
+                className="h-full rounded-full bg-linear-to-r from-[#2FB5AA] to-[#2E6DBE] transition-all duration-300 ease-out"
+                style={{
+                  width: `${Math.min(100, Math.max(0, finishProgress))}%`,
+                }}
+              />
+            </div>
+          </div>
+        )}
+
+        {isUploading && (
+          <div className="mt-3">
+            <div className="mb-1 flex items-center justify-between">
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-violet-500">
+                {systemStatus.toLowerCase().includes("transcrib")
+                  ? "Transcribing"
+                  : "Uploading"}
+              </span>
+              <span className="font-mono text-xs font-bold tabular-nums text-slate-600">
+                {Math.round(Math.min(100, Math.max(0, uploadProgress)))}%
+              </span>
+            </div>
+            <div className="h-2 w-full overflow-hidden rounded-full bg-slate-200/70">
+              <div
+                className="h-full rounded-full bg-linear-to-r from-[#2FB5AA] to-[#2E6DBE] transition-all duration-300 ease-out"
+                style={{
+                  width: `${Math.min(100, Math.max(0, uploadProgress))}%`,
                 }}
               />
             </div>
@@ -404,16 +454,6 @@ export default function CaptureControls({
               />
             </div>
 
-            {isUploading && (
-              <div className="w-full">
-                <div className="h-2 w-full overflow-hidden rounded-full bg-slate-200/70">
-                  <div
-                    className="h-full rounded-full bg-linear-to-r from-violet-500 to-blue-500 transition-all duration-300"
-                    style={{ width: `${uploadProgress}%` }}
-                  />
-                </div>
-              </div>
-            )}
 
             <button
               onClick={onProcessUpload}
