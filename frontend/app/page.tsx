@@ -17,6 +17,9 @@ function SplashScreen() {
       />
 
       <div className="absolute bottom-10 left-1/2 flex -translate-x-1/2 flex-col items-center gap-3">
+        <p className="bg-linear-to-r from-[#2FB5AA] to-[#2E6DBE] bg-clip-text text-xl font-extrabold tracking-wide text-transparent drop-shadow-sm">
+          Silk Optima
+        </p>
         <div className="relative h-1 w-44 overflow-hidden rounded-full bg-white/60 shadow-sm">
           <div className="absolute inset-y-0 left-0 w-1/3 animate-[loadbar_1.1s_ease-in-out_infinite] rounded-full bg-linear-to-r from-[#2FB5AA] to-[#2E6DBE]" />
         </div>

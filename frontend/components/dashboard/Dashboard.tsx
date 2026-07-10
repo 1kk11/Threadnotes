@@ -103,6 +103,8 @@ export default function Dashboard() {
   // the transcript + audio will appear.
   const [isFinishing, setIsFinishing] = useState(false);
   const [finishProgress, setFinishProgress] = useState(0);
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveProgress, setSaveProgress] = useState(0);
   const [transcriptView, setTranscriptView] = useState<"transcript" | "diarize">(
     "transcript",
   );
@@ -128,6 +130,7 @@ export default function Dashboard() {
 
   const [showFinishModal, setShowFinishModal] = useState(false);
   const [showNewConvoModal, setShowNewConvoModal] = useState(false);
+  const [showStartConfirmModal, setShowStartConfirmModal] = useState(false);
   const [showCloseModal, setShowCloseModal] = useState(false);
   const [isSaved, setIsSaved] = useState(false);
   const [showLogoutModal, setShowLogoutModal] = useState(false);
@@ -339,6 +342,18 @@ export default function Dashboard() {
         .join("\n\n"),
     [mergedTranscript],
   );
+
+  // True recorded length for the audio player: WebM blobs report a bogus/short
+  // duration, so we hand the player the length we already know (last transcript
+  // timestamp, or the live session timer).
+  const playbackDurationSec = useMemo(() => {
+    const endMax = mergedTranscript.length
+      ? Math.round(
+          Math.max(0, ...mergedTranscript.map((r) => Number(r.end) || 0)),
+        )
+      : 0;
+    return endMax || sessionTime;
+  }, [mergedTranscript, sessionTime]);
 
   const speakerHex = useMemo(() => {
     const map: Record<string, string> = {};
@@ -668,29 +683,37 @@ export default function Dashboard() {
 
   const handleSaveTranscript = useCallback(async () => {
     if (!transcriptText.trim() && mergedTranscript.length === 0) return;
+    const sid = sessionIdRef.current;
     const kind = transcriptView === "diarize" ? "Diarized" : "Transcript";
-    const defaultName = `ThreadNotes_${kind}_${new Date().toISOString().slice(0, 10)}.txt`;
+    const baseName = `ThreadNotes_${kind}_${new Date().toISOString().slice(0, 10)}`;
+    const savedText =
+      transcriptView === "diarize" && mergedTranscript.length > 0
+        ? mergedTranscript
+            .map((item) => `${item.speaker}: ${stripSpeakerPrefix(item.text)}`)
+            .join("\n\n")
+        : transcriptText;
 
     let savedFilePath: string | undefined;
     let savedName: string | undefined;
 
+    setIsSaving(true);
+    setSaveProgress(5);
+    setStatusMessage("Saving…");
+
     try {
-      if (typeof window !== "undefined" && window.electronAPI?.exportTranscript) {
-        const exportRows = mergedTranscript.map((item) => ({
-          speaker: item.speaker,
-          text: stripSpeakerPrefix(item.text),
-        }));
-        const result = await window.electronAPI.exportTranscript({
-          plainText: transcriptText,
-          diarized: exportRows,
-          view: transcriptView,
-          defaultName,
-        });
-        if (!result.saved) {
-          setStatusMessage("Ready");
-          return;
-        }
-        savedFilePath = result.filePath;
+      if (
+        typeof window !== "undefined" &&
+        window.electronAPI?.saveTranscriptLocal
+      ) {
+        // Auto-save straight into the ThreadNotes folder (Documents/ThreadNotes)
+        // — no OS dialog. MyMeetings' Export button keeps the pick-a-location
+        // dialog for when users want to send a copy elsewhere.
+        const result = await window.electronAPI.saveTranscriptLocal(
+          savedText,
+          baseName,
+          "txt",
+        );
+        savedFilePath = result?.filePath;
         if (savedFilePath) {
           savedName = savedFilePath
             .split(/[\\/]/)
@@ -698,11 +721,11 @@ export default function Dashboard() {
             ?.replace(/\.[^.]+$/, "");
         }
       } else {
-        const blob = new Blob([transcriptText], { type: "text/plain" });
+        const blob = new Blob([savedText], { type: "text/plain" });
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = url;
-        a.download = defaultName;
+        a.download = `${baseName}.txt`;
         a.click();
         URL.revokeObjectURL(url);
       }
@@ -744,14 +767,26 @@ export default function Dashboard() {
         typeof window !== "undefined" &&
         window.electronAPI?.remuxAudio
       ) {
+        // Remuxing the raw recording is the slow part of Save — stream its real
+        // ffmpeg progress to the status bar so the user sees it working.
+        const unsub = window.electronAPI.onSaveProgress
+          ? window.electronAPI.onSaveProgress((pct) => {
+              setSaveProgress(Math.max(5, Math.min(99, pct)));
+            })
+          : undefined;
         try {
-          const { mediaUrl } =
-            await window.electronAPI.remuxAudio(recordedPath);
+          const { mediaUrl } = await window.electronAPI.remuxAudio(
+            recordedPath,
+            durationSec,
+          );
           audioMediaUrl = mediaUrl;
         } catch {
           audioMediaUrl = undefined;
+        } finally {
+          unsub?.();
         }
       }
+      setSaveProgress(100);
       const record = {
         id: Date.now().toString(),
         topic: savedName || `Meeting on ${firstWords}`,
@@ -766,12 +801,21 @@ export default function Dashboard() {
         highlights: highlights.length ? highlights : undefined,
         highlightsShown: showHighlights,
       };
+      // Always persist the meeting, even if the user moved on to a new session.
       addMeeting(record);
-      setSavedMeetingId(record.id);
-      setIsSaved(true);
-      setStatusMessage("✅ Saved!");
+      // …but only touch the live UI if we're still on the same session.
+      if (sid === sessionIdRef.current) {
+        setSavedMeetingId(record.id);
+        setIsSaved(true);
+        setStatusMessage("✅ Saved!");
+      }
     } catch {
-      setStatusMessage("⚠️ Save failed");
+      if (sid === sessionIdRef.current) setStatusMessage("⚠️ Save failed");
+    } finally {
+      if (sid === sessionIdRef.current) {
+        setIsSaving(false);
+        setSaveProgress(0);
+      }
     }
   }, [
     transcriptText,
@@ -834,6 +878,33 @@ export default function Dashboard() {
     setActiveTab("live");
     setView("dashboard");
   }, [cancel, clearPlayback, stopLiveEvents, stopSmoothProgress]);
+
+  // Guard the Start button: if there's a recording being finished/saved, or an
+  // unsaved transcript/audio on screen, confirm before discarding it.
+  const handleStartClick = useCallback(() => {
+    const hasUnsaved =
+      isFinishing ||
+      isSaving ||
+      isDiarizing ||
+      isUploading ||
+      ((!!audioUrl || lines.length > 0 || mergedTranscript.length > 0) &&
+        !isSaved);
+    if (hasUnsaved) {
+      setShowStartConfirmModal(true);
+    } else {
+      void handleStart();
+    }
+  }, [
+    isFinishing,
+    isSaving,
+    isDiarizing,
+    isUploading,
+    audioUrl,
+    lines.length,
+    mergedTranscript.length,
+    isSaved,
+    handleStart,
+  ]);
 
   const handleNewConversationClick = useCallback(() => {
     if (
@@ -1021,6 +1092,8 @@ export default function Dashboard() {
                   diarizeProgress={diarizeProgress}
                   isFinishing={isFinishing}
                   finishProgress={finishProgress}
+                  isSaving={isSaving}
+                  saveProgress={saveProgress}
                   isCompleted={
                     !isRecording &&
                     !isDiarizing &&
@@ -1029,7 +1102,7 @@ export default function Dashboard() {
                       lines.length > 0 ||
                       mergedTranscript.length > 0)
                   }
-                  onStart={handleStart}
+                  onStart={handleStartClick}
                   onPause={handlePause}
                   onResume={handleResume}
                   onStop={() => setShowFinishModal(true)}
@@ -1106,6 +1179,7 @@ export default function Dashboard() {
                           src={audioUrl}
                           audioRef={audioRef}
                           onTimeUpdate={setCurrentAudioTime}
+                          durationSec={playbackDurationSec}
                         />
                         <div className="mt-2 flex items-center justify-between gap-3">
                           <p className="bg-linear-to-r from-indigo-500 to-blue-500 bg-clip-text text-[11px] font-semibold uppercase tracking-widest text-transparent">
@@ -1115,7 +1189,7 @@ export default function Dashboard() {
                             <button
                               onClick={handleDiarizeRetry}
                               disabled={isDiarizing || !audioFilePath}
-                              className="shrink-0 rounded-full bg-slate-100 px-4 py-1 text-xs font-semibold text-slate-700 shadow-sm transition-colors hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-70"
+                              className="shrink-0 rounded-lg bg-linear-to-r from-[#2FB5AA] to-[#2E6DBE] px-4 py-1.5 text-xs font-semibold text-white shadow-sm transition-all hover:from-[#28a29a] hover:to-[#2a61a8] disabled:cursor-not-allowed disabled:opacity-60"
                             >
                               {isDiarizing ? "Diarizing…" : "Diarize"}
                             </button>
@@ -1126,14 +1200,14 @@ export default function Dashboard() {
                                   v === "diarize" ? "transcript" : "diarize",
                                 )
                               }
-                              className="shrink-0 rounded-full bg-slate-100 px-4 py-1 text-xs font-semibold text-slate-700 shadow-sm transition-colors hover:bg-slate-200"
+                              className="shrink-0 rounded-lg bg-linear-to-r from-[#2FB5AA] to-[#2E6DBE] px-4 py-1.5 text-xs font-semibold text-white shadow-sm transition-all hover:from-[#28a29a] hover:to-[#2a61a8]"
                             >
                               {transcriptView === "diarize"
                                 ? "Diarize"
                                 : "Transcript"}
                             </button>
                           ) : (
-                            <span className="shrink-0 rounded-full bg-slate-100 px-4 py-1 text-xs font-semibold text-slate-500 shadow-sm">
+                            <span className="shrink-0 rounded-lg bg-slate-100 px-4 py-1.5 text-xs font-semibold text-slate-500 shadow-sm">
                               Diarized
                             </span>
                           )}
@@ -1378,7 +1452,7 @@ export default function Dashboard() {
                 setView("dashboard");
                 setShowFinishModal(true);
               }}
-              className="flex-1 rounded-xl bg-linear-to-r from-rose-500 to-red-500 py-2.5 text-xs font-bold text-white shadow-md transition-all hover:from-rose-600 hover:to-red-600 active:scale-95"
+              className="flex-1 rounded-xl bg-linear-to-r from-[#2FB5AA] to-[#2E6DBE] py-2.5 text-xs font-bold text-white shadow-md transition-all hover:from-[#28a29a] hover:to-[#2a61a8] active:scale-95"
             >
               Finish
             </button>
@@ -1405,7 +1479,7 @@ export default function Dashboard() {
               </button>
               <button
                 onClick={confirmFinish}
-                className="flex-1 rounded-xl bg-linear-to-r from-rose-500 to-red-500 py-3 text-sm font-bold text-white shadow-lg shadow-red-500/25 transition-all hover:from-rose-600 hover:to-red-600"
+                className="flex-1 rounded-xl bg-linear-to-r from-[#2FB5AA] to-[#2E6DBE] py-3 text-sm font-bold text-white shadow-lg shadow-[#2FB5AA]/25 transition-all hover:from-[#28a29a] hover:to-[#2a61a8]"
               >
                 Finish
               </button>
@@ -1438,6 +1512,52 @@ export default function Dashboard() {
                 className="flex-1 rounded-xl bg-linear-to-r from-violet-500 to-blue-500 py-3 text-sm font-bold text-white shadow-lg shadow-violet-500/25 transition-all hover:from-violet-600 hover:to-blue-600"
               >
                 Start New
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showStartConfirmModal && (
+        <div className="fixed inset-0 z-100 flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-sm rounded-3xl border border-white/60 bg-white p-7 shadow-2xl">
+            <h3 className="text-xl font-bold text-slate-900">
+              Start a new recording?
+            </h3>
+            <p className="mt-2 text-sm text-slate-500">
+              Your current recording hasn&apos;t been saved yet. Starting a new
+              one will discard it. Save it first if you want to keep it.
+            </p>
+            <div className="mt-7 flex gap-3">
+              <button
+                onClick={() => setShowStartConfirmModal(false)}
+                className="flex-1 rounded-xl bg-slate-100 py-3 text-sm font-bold text-slate-700 transition-colors hover:bg-slate-200"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  setShowStartConfirmModal(false);
+                  // Abort any in-flight diarize/recognizer before a fresh start.
+                  if (isDiarizing || isUploading) {
+                    if (uploadAbortRef.current) {
+                      try {
+                        uploadAbortRef.current.abort();
+                      } catch {}
+                      uploadAbortRef.current = null;
+                    }
+                    cancel();
+                    stopSmoothProgress();
+                    setIsDiarizing(false);
+                    setDiarizeProgress(0);
+                    setIsUploading(false);
+                    setUploadProgress(0);
+                  }
+                  void handleStart();
+                }}
+                className="flex-1 rounded-xl bg-linear-to-r from-[#2FB5AA] to-[#2E6DBE] py-3 text-sm font-bold text-white shadow-lg shadow-[#2FB5AA]/25 transition-all hover:from-[#28a29a] hover:to-[#2a61a8]"
+              >
+                Discard &amp; Start
               </button>
             </div>
           </div>

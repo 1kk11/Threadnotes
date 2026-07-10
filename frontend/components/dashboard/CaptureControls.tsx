@@ -31,6 +31,8 @@ type CaptureControlsProps = {
   diarizeProgress?: number;
   isFinishing?: boolean;
   finishProgress?: number;
+  isSaving?: boolean;
+  saveProgress?: number;
   isCompleted?: boolean;
   onStart: () => void;
   onPause: () => void;
@@ -62,6 +64,8 @@ export default function CaptureControls({
   diarizeProgress = 0,
   isFinishing = false,
   finishProgress = 0,
+  isSaving = false,
+  saveProgress = 0,
   isCompleted = false,
   onStart,
   onPause,
@@ -105,7 +109,7 @@ export default function CaptureControls({
         </p>
         <p
           className={`mt-1 text-lg font-bold ${
-            isActive || isDiarizing || isUploading
+            isActive || isDiarizing || isUploading || isFinishing || isSaving
               ? "text-violet-600"
               : "text-slate-800"
           }`}
@@ -172,6 +176,27 @@ export default function CaptureControls({
                 className="h-full rounded-full bg-linear-to-r from-[#2FB5AA] to-[#2E6DBE] transition-all duration-300 ease-out"
                 style={{
                   width: `${Math.min(100, Math.max(0, uploadProgress))}%`,
+                }}
+              />
+            </div>
+          </div>
+        )}
+
+        {isSaving && (
+          <div className="mt-3">
+            <div className="mb-1 flex items-center justify-between">
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-violet-500">
+                Saving
+              </span>
+              <span className="font-mono text-xs font-bold tabular-nums text-slate-600">
+                {Math.round(Math.min(100, Math.max(0, saveProgress)))}%
+              </span>
+            </div>
+            <div className="h-2 w-full overflow-hidden rounded-full bg-slate-200/70">
+              <div
+                className="h-full rounded-full bg-linear-to-r from-[#2FB5AA] to-[#2E6DBE] transition-all duration-300 ease-out"
+                style={{
+                  width: `${Math.min(100, Math.max(0, saveProgress))}%`,
                 }}
               />
             </div>

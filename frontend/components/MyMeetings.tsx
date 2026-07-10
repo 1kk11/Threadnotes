@@ -299,9 +299,21 @@ export default function MyMeetings() {
   const processedMeetings = useMemo(() => {
     let filtered = meetings;
     if (debouncedSearch) {
-      filtered = meetings.filter((m) =>
-        m.topic.toLowerCase().includes(debouncedSearch.toLowerCase()),
-      );
+      const q = debouncedSearch.toLowerCase();
+      filtered = meetings.filter((m) => {
+        // Search the title AND the transcript content, so any remembered word
+        // from the meeting finds it — not just words in the auto-generated title.
+        const haystack = [
+          m.topic,
+          m.plainText,
+          ...(m.transcript?.map((t) => t.text) ?? []),
+          ...(m.diarized?.map((d) => d.text) ?? []),
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        return haystack.includes(q);
+      });
     } else if (selectedDate) {
       filtered = meetings.filter((m) => {
         const d = new Date(m.date);
@@ -836,6 +848,7 @@ export default function MyMeetings() {
                   <AudioPlayer
                     src={selectedMeeting.audioMediaUrl}
                     onTimeUpdate={setMtgAudioTime}
+                    durationSec={selectedMeeting.durationSec}
                   />
                 </div>
               )}
@@ -851,10 +864,10 @@ export default function MyMeetings() {
                   }
                 }}
                 disabled={diarizing}
-                className={`relative shrink-0 overflow-hidden rounded-full px-5 py-1.5 text-sm font-semibold text-slate-800 shadow-sm transition-colors ${
+                className={`relative shrink-0 overflow-hidden rounded-lg px-4 py-1.5 text-xs font-semibold shadow-sm transition-all disabled:cursor-not-allowed disabled:opacity-60 ${
                   diarizing
-                    ? "bg-slate-200"
-                    : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                    ? "bg-slate-200 text-slate-700"
+                    : "bg-linear-to-r from-[#2FB5AA] to-[#2E6DBE] text-white hover:from-[#28a29a] hover:to-[#2a61a8]"
                 } ${selectedMeeting.audioMediaUrl ? "" : "ml-auto"}`}
               >
                 {diarizing && (

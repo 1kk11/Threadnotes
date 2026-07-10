@@ -27,13 +27,19 @@ export default function AudioPlayer({
   src,
   audioRef,
   onTimeUpdate,
+  durationSec,
 }: {
   src: string;
   audioRef?: RefObject<HTMLAudioElement | null>;
   onTimeUpdate?: (t: number) => void;
+  durationSec?: number;
 }) {
   const localRef = useRef<HTMLAudioElement | null>(null);
   const ref = audioRef ?? localRef;
+  // WebM blobs from MediaRecorder ship no duration header, so el.duration is
+  // Infinity until we force the browser to scan to the end. This flag lets us
+  // ignore the currentTime jumps that scan produces.
+  const resolvingRef = useRef(false);
   const [playing, setPlaying] = useState(false);
   const [current, setCurrent] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -86,10 +92,18 @@ export default function AudioPlayer({
     if (el) el.currentTime = v;
   };
 
+  // Ground-truth duration: prefer the media element's own value when it is a
+  // sane finite number, but fall back to the known recorded length (passed in
+  // by the caller) whenever the element reports Infinity or a too-short value.
+  const elDur = Number.isFinite(duration) && duration > 0 ? duration : 0;
+  const knownDur = durationSec && durationSec > 0 ? durationSec : 0;
+  const effectiveDuration = Math.max(elDur, knownDur);
+
   const skip = (delta: number) => {
     const el = ref.current;
     if (!el) return;
-    const next = Math.min(Math.max(el.currentTime + delta, 0), duration || el.currentTime + delta);
+    const cap = effectiveDuration || el.currentTime + delta;
+    const next = Math.min(Math.max(el.currentTime + delta, 0), cap);
     el.currentTime = next;
   };
 
@@ -149,7 +163,7 @@ export default function AudioPlayer({
     } catch {}
   };
 
-  const pct = duration ? (current / duration) * 100 : 0;
+  const pct = effectiveDuration ? (current / effectiveDuration) * 100 : 0;
   const volPct = (muted ? 0 : volume) * 100;
   const VolIcon = muted || volume === 0 ? VolumeX : volume < 0.5 ? Volume1 : Volume2;
 
@@ -199,16 +213,16 @@ export default function AudioPlayer({
         <input
           type="range"
           min={0}
-          max={duration || 0}
+          max={effectiveDuration || 0}
           step="0.1"
-          value={Math.min(current, duration || 0)}
+          value={Math.min(current, effectiveDuration || 0)}
           onChange={(e) => seek(Number(e.target.value))}
           className="audio-range h-1.5 w-full cursor-pointer appearance-none rounded-full"
           style={{ background: seekFill }}
         />
         <div className="flex justify-between font-mono text-[11px] font-semibold tabular-nums text-slate-500">
           <span>{fmt(current)}</span>
-          <span>{fmt(duration)}</span>
+          <span>{fmt(effectiveDuration)}</span>
         </div>
       </div>
 
@@ -295,16 +309,39 @@ export default function AudioPlayer({
         onPlay={() => setPlaying(true)}
         onPause={() => setPlaying(false)}
         onLoadedMetadata={(e) => {
-          setDuration(e.currentTarget.duration || 0);
-          e.currentTarget.playbackRate = rate;
+          const el = e.currentTarget;
+          el.playbackRate = rate;
+          const d = el.duration;
+          if (Number.isFinite(d) && d > 0) {
+            setDuration(d);
+          } else {
+            // Force the browser to scan to the real end so the WebM blob gets a
+            // usable, seekable duration.
+            resolvingRef.current = true;
+            try {
+              el.currentTime = 1e101;
+            } catch {}
+          }
         }}
-        onDurationChange={(e) => setDuration(e.currentTarget.duration || 0)}
+        onDurationChange={(e) => {
+          const el = e.currentTarget;
+          const d = el.duration;
+          if (Number.isFinite(d) && d > 0) {
+            setDuration(d);
+            if (resolvingRef.current) {
+              resolvingRef.current = false;
+              el.currentTime = 0;
+            }
+          }
+        }}
         onTimeUpdate={(e) => {
+          if (resolvingRef.current) return;
           const t = e.currentTarget.currentTime;
           setCurrent(t);
           onTimeUpdate?.(t);
         }}
         onSeeked={(e) => {
+          if (resolvingRef.current) return;
           const t = e.currentTarget.currentTime;
           setCurrent(t);
           onTimeUpdate?.(t);

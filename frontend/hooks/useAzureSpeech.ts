@@ -520,21 +520,28 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
         clearInterval(renewTimerRef.current);
         renewTimerRef.current = null;
       }
-      onProgress?.(0.15);
+      onProgress?.(0.1);
 
-      await new Promise<void>((resolve) => {
-        const r = recognizerRef.current;
-        if (!r) return resolve();
-        r.stopContinuousRecognitionAsync(
-          () => {
-            r.close();
-            resolve();
-          },
-          () => resolve(),
-        );
-      });
+      // Stop the Azure recognizer — but never let it hang the finish. If neither
+      // the success nor error callback fires, a 4s race unblocks us.
+      await Promise.race([
+        new Promise<void>((resolve) => {
+          const r = recognizerRef.current;
+          if (!r) return resolve();
+          r.stopContinuousRecognitionAsync(
+            () => {
+              try {
+                r.close();
+              } catch {}
+              resolve();
+            },
+            () => resolve(),
+          );
+        }),
+        new Promise<void>((resolve) => setTimeout(resolve, 4000)),
+      ]);
       recognizerRef.current = null;
-      onProgress?.(0.4);
+      onProgress?.(0.25);
 
       await new Promise<void>((resolve) => {
         const recorder = mediaRecorderRef.current;
@@ -553,7 +560,7 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
           done();
         }
       });
-      onProgress?.(0.6);
+      onProgress?.(0.3);
 
       let audioFilePath: string | null = null;
       const recordedChunks = recordedChunksRef.current;
@@ -570,9 +577,9 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
         recordedBlob && recordedBlob.size > 0
           ? URL.createObjectURL(recordedBlob)
           : null;
-      onProgress?.(0.75);
 
-      // Write the raw file for diarization + a durable remux later (on save).
+      // Write the raw file to disk in chunks so the finishing bar reflects REAL
+      // bytes written (the genuinely slow part for long meetings) — 30% → 95%.
       if (
         recordedBlob &&
         recordedBlob.size > 0 &&
@@ -582,7 +589,18 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
         try {
           audioFilePath = await window.electronAPI.audioFileCreate();
           const arrayBuffer = await recordedBlob.arrayBuffer();
-          await window.electronAPI.audioFileAppend(audioFilePath, arrayBuffer);
+          const total = arrayBuffer.byteLength;
+          const CHUNK = 4 * 1024 * 1024;
+          let offset = 0;
+          while (offset < total) {
+            const end = Math.min(offset + CHUNK, total);
+            await window.electronAPI.audioFileAppend(
+              audioFilePath,
+              arrayBuffer.slice(offset, end),
+            );
+            offset = end;
+            onProgress?.(0.3 + 0.65 * (offset / total));
+          }
           await window.electronAPI.audioFileClose(audioFilePath);
           audioFilePathRef.current = audioFilePath;
         } catch {

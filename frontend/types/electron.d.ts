@@ -59,11 +59,13 @@ declare global {
     }>;
     remuxAudio: (
       filePath: string,
+      totalDurationSec?: number,
     ) => Promise<{ outputPath: string; fileName: string; mediaUrl: string }>;
     persistUploadAudio: (
       filePath: string,
     ) => Promise<{ outputPath: string; fileName: string; mediaUrl: string }>;
     onUploadProgress: (callback: (pct: number) => void) => () => void;
+    onSaveProgress: (callback: (pct: number) => void) => () => void;
   }
 
   interface Window {

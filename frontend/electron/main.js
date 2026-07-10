@@ -18,10 +18,40 @@ const { pathToFileURL } = require("url");
 
 const isDev = !app.isPackaged;
 
+// ── Data location ────────────────────────────────────────────────────────────
+// Keep ALL user data next to the installed app, in three folders under one root
+// (Transcripts, Recordings, App). Reinstalling to a different path recreates
+// them there. Falls back to Documents only if the install dir is read-only
+// (e.g. a per-machine Program Files install without admin rights).
+app.setName("ThreadNotes");
+
+function resolveDataRoot() {
+    const base = app.isPackaged
+        ? path.dirname(process.execPath)
+        : path.join(__dirname, "..", ".threadnotes-dev-data");
+    const preferred = path.join(base, "ThreadNotes-Data");
+    try {
+        fs.mkdirSync(preferred, { recursive: true });
+        const probe = path.join(preferred, ".write-test");
+        fs.writeFileSync(probe, "ok");
+        fs.unlinkSync(probe);
+        return preferred;
+    } catch {
+        const fallback = path.join(app.getPath("documents"), "ThreadNotes-Data");
+        fs.mkdirSync(fallback, { recursive: true });
+        return fallback;
+    }
+}
+
+const DATA_ROOT = resolveDataRoot();
+// Chromium-managed storage (localStorage = saved meetings, caches) sits under
+// the same root so everything travels together on a reinstall.
+app.setPath("userData", path.join(DATA_ROOT, "App"));
+
 const audioWriteStreams = new Map();
 
 function getRecordingsDirectory() {
-    const recordingsDir = path.join(app.getPath("userData"), "recordings");
+    const recordingsDir = path.join(DATA_ROOT, "Recordings");
     fs.mkdirSync(recordingsDir, { recursive: true });
     return recordingsDir;
 }
@@ -68,7 +98,7 @@ function getFfmpegPath() {
     return _ffmpegPathCache;
 }
 
-function runFfmpeg(args, onProgress) {
+function runFfmpeg(args, onProgress, knownDurationSec) {
     const ffmpegPath = getFfmpegPath();
     return new Promise((resolve, reject) => {
         let proc;
@@ -80,7 +110,10 @@ function runFfmpeg(args, onProgress) {
             );
         }
         let stderr = "";
-        let durationSec = 0;
+        // Seed the total with a caller-supplied duration. WebM blobs from
+        // MediaRecorder have no Duration header, so ffmpeg prints "Duration: N/A"
+        // and progress could never be computed — the known length fixes that.
+        let durationSec = Number(knownDurationSec) > 0 ? Number(knownDurationSec) : 0;
         proc.stderr.on("data", (d) => {
             const chunk = d.toString();
             stderr += chunk;
@@ -682,7 +715,7 @@ ipcMain.handle("rename-transcript-file", async(_event, { oldPath, newBaseName } 
 });
 
 function getLocalTranscriptsDirectory() {
-    const dir = path.join(app.getPath("documents"), "ThreadNotes");
+    const dir = path.join(DATA_ROOT, "Transcripts");
     fs.mkdirSync(dir, { recursive: true });
     return dir;
 }
@@ -806,7 +839,7 @@ ipcMain.handle("persist-upload-audio", async(event, filePath) => {
     };
 });
 
-ipcMain.handle("remux-audio", async(_event, filePath) => {
+ipcMain.handle("remux-audio", async(event, filePath, totalDurationSec) => {
     if (!filePath || !fs.existsSync(filePath)) {
         throw new Error(`Recording file not found for remux: ${filePath}`);
     }
@@ -814,15 +847,23 @@ ipcMain.handle("remux-audio", async(_event, filePath) => {
     const base = path.basename(filePath).replace(/\.[^.]+$/, "");
     const outputPath = path.join(dir, `${base}-final.ogg`);
 
-    await runFfmpeg([
-        "-y",
-        "-fflags", "+genpts+discardcorrupt",
-        "-err_detect", "ignore_err",
-        "-f", "webm",
-        "-i", filePath,
-        "-vn", "-c:a", "libopus", "-b:a", "32k",
-        outputPath,
-    ]);
+    await runFfmpeg(
+        [
+            "-y",
+            "-fflags", "+genpts+discardcorrupt",
+            "-err_detect", "ignore_err",
+            "-f", "webm",
+            "-i", filePath,
+            "-vn", "-c:a", "libopus", "-b:a", "32k",
+            outputPath,
+        ],
+        (pct) => {
+            try {
+                event.sender.send("save-progress", pct);
+            } catch {}
+        },
+        totalDurationSec,
+    );
 
     const fileName = path.basename(outputPath);
     const sizeOnDisk = fs.existsSync(outputPath) ? fs.statSync(outputPath).size : 0;
