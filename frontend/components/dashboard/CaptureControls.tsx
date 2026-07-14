@@ -43,7 +43,11 @@ type CaptureControlsProps = {
   uploadFile: File | null;
   isUploading: boolean;
   uploadProgress: number;
+  isUploadingFile?: boolean;
+  fileUploadPct?: number;
+  uploadReady?: boolean;
   onSelectFile: (file: File) => void;
+  onUploadFile?: () => void;
   onProcessUpload: () => void;
 
   micLabel?: string;
@@ -75,7 +79,11 @@ export default function CaptureControls({
   uploadFile,
   isUploading,
   uploadProgress,
+  isUploadingFile = false,
+  fileUploadPct = 0,
+  uploadReady = false,
   onSelectFile,
+  onUploadFile,
   onProcessUpload,
   micLabel = "Default Microphone",
   detectedLanguage = "English",
@@ -109,7 +117,12 @@ export default function CaptureControls({
         </p>
         <p
           className={`mt-1 text-lg font-bold ${
-            isActive || isDiarizing || isUploading || isFinishing || isSaving
+            isActive ||
+            isDiarizing ||
+            isUploading ||
+            isUploadingFile ||
+            isFinishing ||
+            isSaving
               ? "text-violet-600"
               : "text-slate-800"
           }`}
@@ -465,9 +478,15 @@ export default function CaptureControls({
                   ? uploadFile.name
                   : "Drag & drop a file, or click to browse"}
               </p>
-              <p className="text-xs text-slate-400">
-                Audio or video meeting files
-              </p>
+              {uploadReady ? (
+                <p className="text-xs font-semibold text-emerald-600">
+                  ✓ File uploaded
+                </p>
+              ) : (
+                <p className="text-xs text-slate-400">
+                  Audio or video meeting files
+                </p>
+              )}
               <input
                 ref={fileInputRef}
                 type="file"
@@ -480,12 +499,41 @@ export default function CaptureControls({
             </div>
 
 
+            {isUploadingFile && (
+              <div className="shrink-0">
+                <div className="mb-1 flex items-center justify-between">
+                  <span className="text-[11px] font-semibold uppercase tracking-wider text-violet-500">
+                    Uploading
+                  </span>
+                  <span className="font-mono text-xs font-bold tabular-nums text-slate-600">
+                    {Math.round(Math.min(100, Math.max(0, fileUploadPct)))}%
+                  </span>
+                </div>
+                <div className="h-2 w-full overflow-hidden rounded-full bg-slate-200/70">
+                  <div
+                    className="h-full rounded-full bg-linear-to-r from-[#2FB5AA] to-[#2E6DBE] transition-all duration-300 ease-out"
+                    style={{
+                      width: `${Math.min(100, Math.max(0, fileUploadPct))}%`,
+                    }}
+                  />
+                </div>
+              </div>
+            )}
+
             <button
-              onClick={onProcessUpload}
-              disabled={!uploadFile || isUploading || isDiarizing}
+              onClick={uploadReady ? onProcessUpload : onUploadFile}
+              disabled={
+                !uploadFile || isUploadingFile || isUploading || isDiarizing
+              }
               className="flex w-full shrink-0 items-center justify-center gap-2 rounded-xl bg-linear-to-r from-violet-500 to-blue-500 py-4 [@media(max-height:760px)]:py-2.5 text-sm font-bold text-white shadow-lg shadow-violet-500/25 transition-all hover:from-violet-600 hover:to-blue-600 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {isUploading || isDiarizing ? "Processing..." : "Process File"}
+              {isUploadingFile
+                ? "Uploading..."
+                : isUploading || isDiarizing
+                  ? "Processing..."
+                  : uploadReady
+                    ? "Process File"
+                    : "Upload"}
             </button>
           </>
         )}

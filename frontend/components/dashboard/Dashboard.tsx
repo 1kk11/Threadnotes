@@ -5,7 +5,8 @@ import {
   Plus,
   Pencil,
   Check,
-  Upload,
+  Save,
+  Copy,
   Menu,
   FileText,
   Highlighter,
@@ -87,6 +88,13 @@ export default function Dashboard() {
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
+  // File-upload phase (auto-starts on select) is separate from transcription:
+  // upload streams to a bottom bar; transcription (on Process click) uses the
+  // status bar. uploadedMediaUrl is the persisted audio to transcribe/play.
+  const [isUploadingFile, setIsUploadingFile] = useState(false);
+  const [fileUploadPct, setFileUploadPct] = useState(0);
+  const [uploadReady, setUploadReady] = useState(false);
+  const [uploadedMediaUrl, setUploadedMediaUrl] = useState<string | null>(null);
 
   const [lines, setLines] = useState<string[]>([]);
   const [interim, setInterim] = useState("");
@@ -436,6 +444,11 @@ export default function Dashboard() {
     setIsSaved(false);
     setAudioFilePath(null);
     setSavedMeetingId(null);
+    setUploadFile(null);
+    setIsUploadingFile(false);
+    setFileUploadPct(0);
+    setUploadReady(false);
+    setUploadedMediaUrl(null);
     setTranscriptView("diarize");
     setHighlights([]);
     setHighlightsOnly(false);
@@ -597,8 +610,21 @@ export default function Dashboard() {
     saveTranscriptLocally,
   ]);
 
-  const handleProcessUpload = useCallback(async () => {
-    if (!uploadFile) return;
+  // File just selected — reset state and wait for the user to click Upload.
+  const handleSelectUploadFile = useCallback((file: File) => {
+    setUploadFile(file);
+    setUploadReady(false);
+    setUploadedMediaUrl(null);
+    setIsUploadingFile(false);
+    setFileUploadPct(0);
+    setStatusMessage(null);
+  }, []);
+
+  // Upload click → persist a durable media:// audio, streaming real progress to
+  // the bottom bar. On done we mark ready ("Upload completed"); the button then
+  // becomes Process, and the bottom bar disappears.
+  const handleUploadFile = useCallback(async () => {
+    if (!uploadFile || isUploadingFile || uploadReady) return;
     sessionIdRef.current += 1;
     const sid = sessionIdRef.current;
     clearPlayback();
@@ -606,51 +632,74 @@ export default function Dashboard() {
     setInterim("");
     setMergedTranscript([]);
     setIsSaved(false);
-    setIsUploading(true);
+    setIsUploading(false);
     setUploadProgress(0);
     setTranscriptView("transcript");
-    setStatusMessage("Uploading file…");
+    setCurrentAudioTime(0);
 
-    const token = localStorage.getItem("token");
     const electron =
       typeof window !== "undefined" ? window.electronAPI : undefined;
     const localPath = electron?.getPathForFile?.(uploadFile) || "";
     setAudioFilePath(localPath || null);
-    setCurrentAudioTime(0);
 
+    if (!electron?.persistUploadAudio || !localPath) {
+      setUploadReady(true);
+      setStatusMessage("Ready to process.");
+      return;
+    }
+
+    setIsUploadingFile(true);
+    setFileUploadPct(0);
+    setStatusMessage("Uploading file…");
+    const unsub = electron.onUploadProgress
+      ? electron.onUploadProgress((pct) => {
+          if (sid === sessionIdRef.current) setFileUploadPct(pct);
+        })
+      : undefined;
     try {
-      if (!electron?.audioCompressAndRead || !localPath) {
-        throw new Error("Audio processing is only available in the desktop app.");
-      }
-
-      // Phase 1 — Uploading: persist a durable media:// audio (also plays in
-      // MyMeetings). Real ffmpeg progress streamed to the bar.
-      const unsub = electron.onUploadProgress
-        ? electron.onUploadProgress((pct) => {
-            if (sid === sessionIdRef.current) setUploadProgress(pct);
-          })
-        : undefined;
-      let mediaUrl: string | null = null;
-      try {
-        mediaUrl = electron.persistUploadAudio
-          ? await electron
-              .persistUploadAudio(localPath)
-              .then((r) => r.mediaUrl)
-              .catch(() => null)
-          : null;
-      } finally {
-        unsub?.();
-      }
+      const mediaUrl = await electron
+        .persistUploadAudio(localPath)
+        .then((r) => r.mediaUrl)
+        .catch(() => null);
       if (sid !== sessionIdRef.current) return;
-      setUploadProgress(100);
-      setStatusMessage("Upload file completed");
-      // Brief pause so the user sees the upload finished, then auto-transcribe.
-      await new Promise((r) => setTimeout(r, 2000));
-      if (sid !== sessionIdRef.current) return;
+      setUploadedMediaUrl(mediaUrl);
+      setUploadReady(true);
+      setStatusMessage("Upload completed");
+    } catch {
+      if (sid === sessionIdRef.current) setStatusMessage("⚠️ Upload failed");
+    } finally {
+      unsub?.();
+      // Reset the bar's value; it only shows while uploading, so it disappears.
+      if (sid === sessionIdRef.current) {
+        setIsUploadingFile(false);
+        setFileUploadPct(0);
+      }
+    }
+  }, [uploadFile, isUploadingFile, uploadReady, clearPlayback]);
 
-      // Phase 2 — Transcribing: parallel chunks, real per-chunk progress.
-      setUploadProgress(0);
-      setStatusMessage("Transcribing…");
+  // Process click → transcribe the already-uploaded file. Progress shows in the
+  // status bar (parallel chunks, real per-chunk progress).
+  const handleProcessUpload = useCallback(async () => {
+    if (!uploadFile || !uploadReady || isUploadingFile) return;
+    const sid = sessionIdRef.current;
+    const token = localStorage.getItem("token");
+    const electron =
+      typeof window !== "undefined" ? window.electronAPI : undefined;
+    const localPath =
+      audioFilePath || electron?.getPathForFile?.(uploadFile) || "";
+
+    if (!electron?.audioCompressAndRead || !localPath) {
+      setStatusMessage(
+        "Audio processing is only available in the desktop app.",
+      );
+      return;
+    }
+
+    setIsUploading(true);
+    setUploadProgress(0);
+    setTranscriptView("transcript");
+    setStatusMessage("Transcribing…");
+    try {
       const text = await transcribeAudioFile(localPath, {
         jwt: token,
         onProgress: (doneN, total) => {
@@ -660,14 +709,11 @@ export default function Dashboard() {
         },
       });
       if (sid !== sessionIdRef.current) return;
-
-      setAudioUrl(mediaUrl || URL.createObjectURL(uploadFile));
+      setAudioUrl(uploadedMediaUrl || URL.createObjectURL(uploadFile));
       setLines(text.trim() ? [text.trim()] : []);
       setMergedTranscript([]);
       setTranscriptView("transcript");
       setActiveTab("live");
-      setIsUploading(false);
-      setUploadProgress(0);
       setStatusMessage(
         text.trim()
           ? "Transcript ready — click Diarize to separate speakers."
@@ -675,11 +721,46 @@ export default function Dashboard() {
       );
     } catch (e: any) {
       if (sid !== sessionIdRef.current) return;
-      setIsUploading(false);
-      setUploadProgress(0);
       setStatusMessage(e?.message || "Could not process the file.");
+    } finally {
+      if (sid === sessionIdRef.current) {
+        setIsUploading(false);
+        setUploadProgress(0);
+      }
     }
-  }, [uploadFile, clearPlayback]);
+  }, [uploadFile, uploadReady, isUploadingFile, audioFilePath, uploadedMediaUrl]);
+
+  // Copy the open view: diarize -> "Speaker: text" blocks; transcript -> plain.
+  const handleCopyTranscript = useCallback(async () => {
+    const text =
+      transcriptView === "diarize" && mergedTranscript.length > 0
+        ? mergedTranscript
+            .map((item) => `${item.speaker}: ${stripSpeakerPrefix(item.text)}`)
+            .join("\n\n")
+        : transcriptText;
+    if (!text.trim()) return;
+    let ok = false;
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text.trim());
+        ok = true;
+      }
+    } catch {}
+    if (!ok) {
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = text.trim();
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        ok = document.execCommand("copy");
+        document.body.removeChild(ta);
+      } catch {}
+    }
+    setStatusMessage(ok ? "Copied to clipboard" : "Copy failed");
+  }, [transcriptView, mergedTranscript, transcriptText]);
 
   const handleSaveTranscript = useCallback(async () => {
     if (!transcriptText.trim() && mergedTranscript.length === 0) return;
@@ -861,6 +942,10 @@ export default function Dashboard() {
     setDiarizeProgress(0);
     setIsUploading(false);
     setUploadProgress(0);
+    setIsUploadingFile(false);
+    setFileUploadPct(0);
+    setUploadReady(false);
+    setUploadedMediaUrl(null);
     setSessionTime(0);
     setLines([]);
     setInterim("");
@@ -887,6 +972,7 @@ export default function Dashboard() {
       isSaving ||
       isDiarizing ||
       isUploading ||
+      isUploadingFile ||
       ((!!audioUrl || lines.length > 0 || mergedTranscript.length > 0) &&
         !isSaved);
     if (hasUnsaved) {
@@ -899,6 +985,7 @@ export default function Dashboard() {
     isSaving,
     isDiarizing,
     isUploading,
+    isUploadingFile,
     audioUrl,
     lines.length,
     mergedTranscript.length,
@@ -1098,6 +1185,7 @@ export default function Dashboard() {
                     !isRecording &&
                     !isDiarizing &&
                     !isUploading &&
+                    !isUploadingFile &&
                     (!!audioUrl ||
                       lines.length > 0 ||
                       mergedTranscript.length > 0)
@@ -1110,7 +1198,11 @@ export default function Dashboard() {
                   uploadFile={uploadFile}
                   isUploading={isUploading}
                   uploadProgress={uploadProgress}
-                  onSelectFile={setUploadFile}
+                  isUploadingFile={isUploadingFile}
+                  fileUploadPct={fileUploadPct}
+                  uploadReady={uploadReady}
+                  onSelectFile={handleSelectUploadFile}
+                  onUploadFile={handleUploadFile}
                   onProcessUpload={handleProcessUpload}
                   micLabel={micLabel}
                   detectedLanguage={detectedLanguage}
@@ -1145,6 +1237,20 @@ export default function Dashboard() {
                             </span>
                           </button>
                         )}
+                        {!mergedEditMode &&
+                          (transcriptText.trim() ||
+                            mergedTranscript.length > 0) && (
+                            <button
+                              onClick={handleCopyTranscript}
+                              aria-label="Copy content"
+                              className="group relative flex h-9 w-9 items-center justify-center rounded-lg bg-white/20 text-white ring-1 ring-white/30 transition-colors hover:bg-white/30"
+                            >
+                              <Copy className="h-4 w-4" />
+                              <span className="pointer-events-none absolute top-full left-1/2 z-50 mt-2 hidden -translate-x-1/2 whitespace-nowrap rounded-md bg-slate-900 px-2 py-1 text-xs font-medium text-white shadow-lg group-hover:block">
+                                Copy
+                              </span>
+                            </button>
+                          )}
                         <button
                           onClick={toggleMergedEdit}
                           aria-label={mergedEditMode ? "Done" : "Edit"}
@@ -1165,7 +1271,7 @@ export default function Dashboard() {
                           aria-label="Save"
                           className="group relative flex h-9 w-9 items-center justify-center rounded-lg bg-white/20 text-white ring-1 ring-white/30 transition-colors hover:bg-white/30 disabled:cursor-not-allowed disabled:opacity-50"
                         >
-                          <Upload className="h-4 w-4" />
+                          <Save className="h-4 w-4" />
                           <span className="pointer-events-none absolute top-full left-1/2 z-50 mt-2 hidden -translate-x-1/2 whitespace-nowrap rounded-md bg-slate-900 px-2 py-1 text-xs font-medium text-white shadow-lg group-hover:block">
                             Save
                           </span>

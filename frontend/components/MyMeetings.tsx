@@ -91,6 +91,11 @@ export default function MyMeetings() {
   const [meetingToDelete, setMeetingToDelete] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
+  // Quick filter tabs.
+  const [activeFilter, setActiveFilter] = useState<
+    "all" | "today" | "week" | "month" | "diarized" | "not-diarized"
+  >("all");
+
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
 
@@ -298,9 +303,10 @@ export default function MyMeetings() {
 
   const processedMeetings = useMemo(() => {
     let filtered = meetings;
+
     if (debouncedSearch) {
       const q = debouncedSearch.toLowerCase();
-      filtered = meetings.filter((m) => {
+      filtered = filtered.filter((m) => {
         // Search the title AND the transcript content, so any remembered word
         // from the meeting finds it — not just words in the auto-generated title.
         const haystack = [
@@ -314,17 +320,47 @@ export default function MyMeetings() {
           .toLowerCase();
         return haystack.includes(q);
       });
-    } else if (selectedDate) {
-      filtered = meetings.filter((m) => {
+    }
+
+    if (activeFilter !== "all") {
+      const now = new Date();
+      const startOfWeek = new Date(now);
+      startOfWeek.setHours(0, 0, 0, 0);
+      startOfWeek.setDate(startOfWeek.getDate() - ((now.getDay() + 6) % 7));
+      filtered = filtered.filter((m) => {
+        const d = new Date(m.date);
+        switch (activeFilter) {
+          case "today":
+            return d.toDateString() === now.toDateString();
+          case "week":
+            return d >= startOfWeek;
+          case "month":
+            return (
+              d.getFullYear() === now.getFullYear() &&
+              d.getMonth() === now.getMonth()
+            );
+          case "diarized":
+            return !!getDiarizedRows(m);
+          case "not-diarized":
+            return !getDiarizedRows(m);
+          default:
+            return true;
+        }
+      });
+    }
+
+    if (selectedDate) {
+      filtered = filtered.filter((m) => {
         const d = new Date(m.date);
         const meetingDateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
         return meetingDateStr === selectedDate;
       });
     }
+
     return filtered.sort(
       (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime(),
     );
-  }, [meetings, debouncedSearch, selectedDate]);
+  }, [meetings, debouncedSearch, activeFilter, selectedDate]);
 
   const datesWithMeetings = useMemo(() => {
     const dateSet = new Set<string>();
@@ -356,6 +392,7 @@ export default function MyMeetings() {
     saveMeetings(updated);
     setMeetingToDelete(null);
   };
+
 
   const openMeeting = (meeting: Meeting) => {
     setSelectedMeeting(meeting);
@@ -599,6 +636,31 @@ export default function MyMeetings() {
                   )}
                 </button>
               </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 bg-slate-50/50 px-4 py-3 shrink-0">
+              {(
+                [
+                  { key: "all", label: "All" },
+                  { key: "today", label: "Today" },
+                  { key: "week", label: "This Week" },
+                  { key: "month", label: "This Month" },
+                  { key: "diarized", label: "Diarized" },
+                  { key: "not-diarized", label: "Not Diarized" },
+                ] as const
+              ).map((f) => (
+                <button
+                  key={f.key}
+                  onClick={() => setActiveFilter(f.key)}
+                  className={`rounded-full border px-3.5 py-1.5 text-xs font-semibold transition-colors ${
+                    activeFilter === f.key
+                      ? "border-indigo-600 bg-indigo-600 text-white shadow-sm"
+                      : "border-slate-200 bg-white text-slate-600 hover:border-indigo-300 hover:text-indigo-600"
+                  }`}
+                >
+                  {f.label}
+                </button>
+              ))}
             </div>
 
             <div className="p-4 flex-1 overflow-y-auto custom-scrollbar space-y-2">

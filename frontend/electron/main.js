@@ -18,40 +18,22 @@ const { pathToFileURL } = require("url");
 
 const isDev = !app.isPackaged;
 
-// ── Data location ────────────────────────────────────────────────────────────
-// Keep ALL user data next to the installed app, in three folders under one root
-// (Transcripts, Recordings, App). Reinstalling to a different path recreates
-// them there. Falls back to Documents only if the install dir is read-only
-// (e.g. a per-machine Program Files install without admin rights).
+// Force a consistent app-data folder name in BOTH dev and packaged builds. Without
+// this, dev runs use the package.json name ("frontend") → data lands in
+// AppData\Roaming\frontend, which is why it seemed to "disappear". Now everything
+// always lives under AppData\Roaming\ThreadNotes. Must run before any getPath().
 app.setName("ThreadNotes");
-
-function resolveDataRoot() {
-    const base = app.isPackaged
-        ? path.dirname(process.execPath)
-        : path.join(__dirname, "..", ".threadnotes-dev-data");
-    const preferred = path.join(base, "ThreadNotes-Data");
-    try {
-        fs.mkdirSync(preferred, { recursive: true });
-        const probe = path.join(preferred, ".write-test");
-        fs.writeFileSync(probe, "ok");
-        fs.unlinkSync(probe);
-        return preferred;
-    } catch {
-        const fallback = path.join(app.getPath("documents"), "ThreadNotes-Data");
-        fs.mkdirSync(fallback, { recursive: true });
-        return fallback;
-    }
-}
-
-const DATA_ROOT = resolveDataRoot();
-// Chromium-managed storage (localStorage = saved meetings, caches) sits under
-// the same root so everything travels together on a reinstall.
-app.setPath("userData", path.join(DATA_ROOT, "App"));
 
 const audioWriteStreams = new Map();
 
+// Store audio in the OS-standard per-user data dir (AppData\Roaming\ThreadNotes
+// on Windows). This location is NEVER touched by the installer, so recordings —
+// and the localStorage that holds meetings + the login token — survive
+// reinstalls. (Do NOT move userData into the install folder: the NSIS uninstaller
+// wipes the install dir on reinstall, which would clear meetings and force a
+// re-login.)
 function getRecordingsDirectory() {
-    const recordingsDir = path.join(DATA_ROOT, "Recordings");
+    const recordingsDir = path.join(app.getPath("userData"), "recordings");
     fs.mkdirSync(recordingsDir, { recursive: true });
     return recordingsDir;
 }
@@ -495,6 +477,11 @@ function createWindow() {
 }
 
 app.whenReady().then(async () => {
+    // Print exactly where user data is stored, so it's never a mystery.
+    console.log("[ThreadNotes] Data folder :", app.getPath("userData"));
+    console.log("[ThreadNotes] Recordings  :", getRecordingsDirectory());
+    console.log("[ThreadNotes] Transcripts :", getLocalTranscriptsDirectory());
+
     protocol.handle(APP_SCHEME, handleAppProtocol);
     protocol.handle(MEDIA_SCHEME, handleMediaProtocol);
 
@@ -715,7 +702,12 @@ ipcMain.handle("rename-transcript-file", async(_event, { oldPath, newBaseName } 
 });
 
 function getLocalTranscriptsDirectory() {
-    const dir = path.join(DATA_ROOT, "Transcripts");
+    // Keep transcripts in the app's own per-user data dir (AppData\Roaming\
+    // ThreadNotes\Transcripts). Do NOT use Documents: Windows OneDrive "Known
+    // Folder Move" redirects Documents into OneDrive and syncs it to the cloud —
+    // which would break the local-only promise. AppData is never OneDrive-synced,
+    // never touched by the installer, and survives reinstalls.
+    const dir = path.join(app.getPath("userData"), "Transcripts");
     fs.mkdirSync(dir, { recursive: true });
     return dir;
 }
