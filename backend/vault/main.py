@@ -22,7 +22,8 @@ from pydantic import BaseModel, EmailStr
 from azure.cosmos import CosmosClient
 from dotenv import load_dotenv
 
-load_dotenv()
+_BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+load_dotenv(os.path.join(_BACKEND_DIR, ".env"))
 
 SECRET_KEY = os.getenv("JWT_SECRET", "threadnotes-super-secret-key")
 ALGORITHM = "HS256"
@@ -33,6 +34,10 @@ COSMOS_ENDPOINT = os.getenv("COSMOS_ENDPOINT")
 COSMOS_KEY = os.getenv("COSMOS_KEY")
 DATABASE_NAME = os.getenv("COSMOS_DATABASE")
 USERS_CONTAINER = os.getenv("COSMOS_USERS_CONTAINER", "users")
+JOBS_CONTAINER = os.getenv("COSMOS_JOBS_CONTAINER", "jobs")
+
+AZURE_STORAGE_CONNECTION_STRING = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
+AZURE_STORAGE_CONTAINER = os.getenv("AZURE_STORAGE_CONTAINER", "transcripts-audio")
 
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "").strip()
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
@@ -91,6 +96,8 @@ def _diagnose_env():
             size,
         )
 
+    asyncio.create_task(_job_worker_loop())
+
 
 security = HTTPBearer(auto_error=True)
 
@@ -110,6 +117,42 @@ def get_users_container():
         database = client.get_database_client(DATABASE_NAME)
         _users_cont = database.get_container_client(USERS_CONTAINER)
     return _users_cont
+
+
+_jobs_cont = None
+
+
+def get_jobs_container():
+    global _jobs_cont
+    if _jobs_cont is None:
+        if not COSMOS_ENDPOINT or not COSMOS_KEY or not DATABASE_NAME:
+            raise HTTPException(status_code=500, detail="Cosmos DB configuration is missing.")
+        from azure.cosmos import PartitionKey
+        client = CosmosClient(COSMOS_ENDPOINT, COSMOS_KEY)
+        database = client.get_database_client(DATABASE_NAME)
+        try:
+            _jobs_cont = database.create_container_if_not_exists(id=JOBS_CONTAINER, partition_key=PartitionKey(path="/id"))
+        except Exception:
+            _jobs_cont = database.get_container_client(JOBS_CONTAINER)
+    return _jobs_cont
+
+
+_blob_client = None
+
+
+def get_blob_container():
+    global _blob_client
+    if _blob_client is None:
+        if not AZURE_STORAGE_CONNECTION_STRING:
+            raise HTTPException(status_code=500, detail="AZURE_STORAGE_CONNECTION_STRING is missing in the environment.")
+        from azure.storage.blob import BlobServiceClient
+        client = BlobServiceClient.from_connection_string(AZURE_STORAGE_CONNECTION_STRING)
+        _blob_client = client.get_container_client(AZURE_STORAGE_CONTAINER)
+        try:
+            _blob_client.create_container()
+        except Exception:
+            pass
+    return _blob_client
 
 
 def build_openai_client():
@@ -222,28 +265,26 @@ def _build_gmail_service():
     """
     try:
         print(f"[GMAIL] building service — token path: {GMAIL_TOKEN_PATH}")
-        if not os.path.exists(GMAIL_TOKEN_PATH):
-            raise HTTPException(
-                status_code=500,
-                detail=f"Secret file not found at {GMAIL_TOKEN_PATH}",
-            )
-
         from google.oauth2.credentials import Credentials
         from google.auth.transport.requests import Request
         from googleapiclient.discovery import build
+        from google_auth_oauthlib.flow import InstalledAppFlow
 
-        creds = Credentials.from_authorized_user_file(GMAIL_TOKEN_PATH, GMAIL_SCOPES)
+        creds = None
+        if os.path.exists(GMAIL_TOKEN_PATH):
+            creds = Credentials.from_authorized_user_file(GMAIL_TOKEN_PATH, GMAIL_SCOPES)
 
-        if not creds.valid:
-            if creds.expired and creds.refresh_token:
+        if not creds or not creds.valid:
+            if creds and creds.expired and creds.refresh_token:
                 print("[GMAIL] access token expired — refreshing via refresh_token")
                 creds.refresh(Request())
             else:
-                raise HTTPException(
-                    status_code=500,
-                    detail="Gmail credentials are invalid and cannot be refreshed. "
-                    "Regenerate token.json and re-upload it as a Render secret file.",
-                )
+                print("[GMAIL] token missing or invalid, starting local browser auth flow...")
+                flow = InstalledAppFlow.from_client_secrets_file(GMAIL_CREDENTIALS_PATH, GMAIL_SCOPES)
+                creds = flow.run_local_server(port=0)
+            
+            with open(GMAIL_TOKEN_PATH, "w") as token:
+                token.write(creds.to_json())
 
         service = build("gmail", "v1", credentials=creds, cache_discovery=False)
         print("[GMAIL] service built successfully")
@@ -1000,6 +1041,121 @@ async def transcribe_stream(
 @app.get("/")
 async def root():
     return {"status": "ok", "message": "ThreadNotes Cloud Vault is running."}
+
+
+async def _job_worker_loop():
+    while True:
+        try:
+            await asyncio.sleep(5)
+            # The CosmosDB SDK is synchronous, so we should run queries in thread
+            # but for a simple polling loop in the background, this is usually fast enough.
+            jobs_cont = await asyncio.to_thread(get_jobs_container)
+            pending_jobs = list(await asyncio.to_thread(
+                lambda: list(jobs_cont.query_items(
+                    "SELECT * FROM c WHERE c.status = 'pending'",
+                    enable_cross_partition_query=True
+                ))
+            ))
+            for job in pending_jobs:
+                job["status"] = "processing"
+                await asyncio.to_thread(jobs_cont.upsert_item, job)
+                
+                try:
+                    blob_name = job.get("blob_name")
+                    filename = job.get("filename", "audio.ogg")
+                    content_type = job.get("content_type", "audio/ogg")
+                    
+                    if blob_name:
+                        blob_container = await asyncio.to_thread(get_blob_container)
+                        blob_client = blob_container.get_blob_client(blob_name)
+                        stream = await asyncio.to_thread(blob_client.download_blob)
+                        audio_bytes = await asyncio.to_thread(stream.readall)
+                        
+                        segments = await asyncio.to_thread(
+                            _run_diarization,
+                            audio_bytes,
+                            filename,
+                            content_type
+                        )
+                        job["segments"] = segments
+                        job["merged_transcript"] = segments
+                        job["status"] = "completed"
+                        
+                        try:
+                            await asyncio.to_thread(blob_client.delete_blob)
+                        except Exception:
+                            pass
+                    else:
+                        job["status"] = "failed"
+                        job["error"] = "Blob name not found"
+                except Exception as e:
+                    job["status"] = "failed"
+                    job["error"] = str(e)
+                finally:
+                    await asyncio.to_thread(jobs_cont.upsert_item, job)
+        except Exception as e:
+            print(f"Worker loop error: {e}")
+
+@app.post("/diarize/background")
+async def diarize_background(
+    file: UploadFile = File(...),
+    user: dict = Depends(get_current_user),
+):
+    try:
+        audio_bytes = await file.read()
+        if not audio_bytes:
+            raise HTTPException(status_code=400, detail="Empty audio upload.")
+            
+        job_id = str(uuid.uuid4())
+        blob_name = f"{job_id}_{file.filename or 'audio.ogg'}"
+        
+        blob_container = get_blob_container()
+        blob_client = blob_container.get_blob_client(blob_name)
+        blob_client.upload_blob(audio_bytes, overwrite=True)
+            
+        job_doc = {
+            "id": job_id,
+            "status": "pending",
+            "blob_name": blob_name,
+            "filename": file.filename or "audio.ogg",
+            "content_type": file.content_type or "audio/ogg",
+            "user_id": user.get("sub"),
+            "created_at": datetime.now(timezone.utc).isoformat()
+        }
+        
+        jobs_cont = get_jobs_container()
+        jobs_cont.create_item(job_doc)
+        
+        return {"status": "success", "job_id": job_id}
+    except Exception as exc:
+        traceback.print_exc()
+        return {"status": "error", "message": str(exc)}
+
+@app.get("/jobs/{job_id}")
+async def get_job_status(job_id: str, user: dict = Depends(get_current_user)):
+    try:
+        jobs_cont = get_jobs_container()
+        job_list = list(jobs_cont.query_items(
+            "SELECT * FROM c WHERE c.id = @id",
+            parameters=[{"name": "@id", "value": job_id}],
+            enable_cross_partition_query=True
+        ))
+        if not job_list:
+            raise HTTPException(status_code=404, detail="Job not found")
+            
+        job = job_list[0]
+        return {
+            "status": "success",
+            "job_status": job.get("status"),
+            "segments": job.get("segments", []),
+            "merged_transcript": job.get("merged_transcript", []),
+            "error": job.get("error")
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        traceback.print_exc()
+        return {"status": "error", "message": str(exc)}
 
 
 if __name__ == "__main__":

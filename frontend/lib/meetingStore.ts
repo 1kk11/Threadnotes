@@ -21,6 +21,7 @@ export type StoredMeeting = {
   audioMediaUrl?: string;
   highlights?: string[];
   highlightsShown?: boolean;
+  jobId?: string;
 };
 
 function currentUserId(): string {

@@ -17,13 +17,9 @@ import Sidebar, { type DashboardView } from "./Sidebar";
 import MobileSidebar from "./MobileSidebar";
 import CaptureControls from "./CaptureControls";
 import TranscriptArea from "./TranscriptArea";
-import {
-  loadMeetings,
-  addMeeting,
-  MEETINGS_EVENT,
-} from "@/lib/meetingStore";
+import { loadMeetings, addMeeting, updateMeeting, MEETINGS_EVENT } from "@/lib/meetingStore";
 import { getUserName, clearSession } from "@/lib/auth";
-import { diarizeAudioFile, transcribeAudioFile } from "@/lib/diarize";
+import { diarizeAudioFile, transcribeAudioFile, diarizeAudioFileBackground } from "@/lib/diarize";
 import ConfirmModal from "@/components/ui/ConfirmModal";
 import ScrollNav from "@/components/ui/ScrollNav";
 import AudioPlayer from "@/components/ui/AudioPlayer";
@@ -890,8 +886,10 @@ export default function Dashboard() {
         setIsSaved(true);
         setStatusMessage("✅ Saved!");
       }
+      return record.id;
     } catch {
       if (sid === sessionIdRef.current) setStatusMessage("⚠️ Save failed");
+      return null;
     } finally {
       if (sid === sessionIdRef.current) {
         setIsSaving(false);
@@ -910,6 +908,40 @@ export default function Dashboard() {
     showHighlights,
     getRecordingFilePath,
   ]);
+
+  const handleDiarizeBG = useCallback(async () => {
+    if (!audioFilePath || isDiarizing || mergedTranscript.length > 0) {
+      return;
+    }
+    
+    let currentMeetingId = savedMeetingId;
+    // We must save the meeting first if it's not saved, so it has an ID
+    if (!currentMeetingId) {
+      setStatusMessage("Saving meeting before starting background job...");
+      currentMeetingId = await handleSaveTranscript() ?? null;
+    }
+    
+    if (!currentMeetingId) {
+      setStatusMessage("⚠️ Could not save meeting");
+      return;
+    }
+    
+    const token = localStorage.getItem("token");
+    setIsDiarizing(true);
+    setStatusMessage("Starting background diarization...");
+    try {
+      const jobId = await diarizeAudioFileBackground(audioFilePath, { jwt: token });
+      
+      // Update the meeting in local storage with the jobId
+      updateMeeting(currentMeetingId, { jobId });
+      
+      setStatusMessage("Diarizing in background... you can safely close this meeting.");
+    } catch (e: any) {
+      setStatusMessage(e?.message || "⚠️ Failed to start background diarization");
+    } finally {
+      setIsDiarizing(false);
+    }
+  }, [audioFilePath, isDiarizing, mergedTranscript.length, savedMeetingId, handleSaveTranscript]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -1292,13 +1324,23 @@ export default function Dashboard() {
                             Play to highlight the transcript in sync
                           </p>
                           {mergedTranscript.length === 0 ? (
-                            <button
-                              onClick={handleDiarizeRetry}
-                              disabled={isDiarizing || !audioFilePath}
-                              className="shrink-0 rounded-lg bg-linear-to-r from-[#2FB5AA] to-[#2E6DBE] px-4 py-1.5 text-xs font-semibold text-white shadow-sm transition-all hover:from-[#28a29a] hover:to-[#2a61a8] disabled:cursor-not-allowed disabled:opacity-60"
-                            >
-                              {isDiarizing ? "Diarizing…" : "Diarize"}
-                            </button>
+                            <div className="flex gap-2">
+                              <button
+                                onClick={handleDiarizeRetry}
+                                disabled={isDiarizing || !audioFilePath}
+                                className="shrink-0 rounded-lg bg-linear-to-r from-[#2FB5AA] to-[#2E6DBE] px-4 py-1.5 text-xs font-semibold text-white shadow-sm transition-all hover:from-[#28a29a] hover:to-[#2a61a8] disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                {isDiarizing ? "Diarizing…" : "Diarize"}
+                              </button>
+                              <button
+                                onClick={handleDiarizeBG}
+                                disabled={isDiarizing || !audioFilePath}
+                                className="shrink-0 rounded-lg bg-linear-to-r from-violet-500 to-indigo-500 px-4 py-1.5 text-xs font-semibold text-white shadow-sm transition-all hover:from-violet-600 hover:to-indigo-600 disabled:cursor-not-allowed disabled:opacity-60"
+                                title="Run in the cloud so you can close this window"
+                              >
+                                Diarize in BG
+                              </button>
+                            </div>
                           ) : transcriptText ? (
                             <button
                               onClick={() =>

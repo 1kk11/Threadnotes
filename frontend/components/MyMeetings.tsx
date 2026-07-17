@@ -12,7 +12,7 @@ import {
   updateMeeting,
   MEETINGS_EVENT,
 } from "@/lib/meetingStore";
-import { diarizeAudioFile } from "@/lib/diarize";
+import { diarizeAudioFile, getDiarizeJobStatus } from "@/lib/diarize";
 import AudioPlayer from "@/components/ui/AudioPlayer";
 
 type TranscriptEntry = { speaker: string; text: string; timestamp: string };
@@ -300,6 +300,52 @@ export default function MyMeetings() {
       document.removeEventListener("keydown", handleKeyDown);
     };
   }, [selectedMeeting, isCalendarOpen]);
+
+  // Polling loop for background diarization jobs
+  useEffect(() => {
+    let active = true;
+    const pollJobs = async () => {
+      const meetingsWithJobs = meetings.filter(m => m.jobId);
+      if (meetingsWithJobs.length === 0) return;
+      
+      const token = localStorage.getItem("token");
+      
+      for (const meeting of meetingsWithJobs) {
+        try {
+          const result = await getDiarizeJobStatus(meeting.jobId!, token);
+          if (!active) return;
+          
+          if (result.status === "completed" && result.segments) {
+            const diarized = result.segments.map((r) => ({
+              speaker: r.speaker,
+              text: r.text,
+              start: r.start,
+              end: r.end,
+              words: r.words,
+            }));
+            // Remove jobId to stop polling
+            updateMeeting(meeting.id, { diarized, jobId: undefined });
+            showToast("Background diarization completed");
+          } else if (result.status === "failed") {
+            // Remove jobId to stop polling, show error
+            updateMeeting(meeting.id, { jobId: undefined });
+            showToast("Background diarization failed: " + result.error);
+          }
+        } catch (e) {
+          // just ignore polling errors, keep trying later
+        }
+      }
+    };
+
+    const interval = setInterval(() => {
+      void pollJobs();
+    }, 10000); // 10 seconds
+
+    return () => {
+      active = false;
+      clearInterval(interval);
+    };
+  }, [meetings]);
 
   const processedMeetings = useMemo(() => {
     let filtered = meetings;
@@ -720,6 +766,12 @@ export default function MyMeetings() {
                             minute: "2-digit",
                           })}
                         </span>
+                        {meeting.jobId && (
+                          <>
+                            <span className="w-1 h-1 bg-slate-300 rounded-full"></span>
+                            <span className="text-violet-500 font-bold animate-pulse">Diarizing in background...</span>
+                          </>
+                        )}
                       </div>
                     </div>
 

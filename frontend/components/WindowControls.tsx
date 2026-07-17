@@ -1,7 +1,16 @@
 "use client";
 import { Minus, Square, X } from "lucide-react";
+import { useEffect, useState } from "react";
 
 export default function WindowControls() {
+  const [isClient, setIsClient] = useState(false);
+
+  useEffect(() => {
+    setIsClient(true);
+  }, []);
+
+  if (!isClient) return null;
+
   const api = typeof window !== "undefined" ? window.electronAPI : undefined;
   if (!api?.windowClose) return null;
 

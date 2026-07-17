@@ -138,3 +138,56 @@ export async function transcribeAudioFile(
 
   return parts.filter(Boolean).join("\n\n");
 }
+
+export async function diarizeAudioFileBackground(
+  audioFilePath: string,
+  opts: Opts = {},
+): Promise<string> {
+  const electron =
+    typeof window !== "undefined" ? window.electronAPI : undefined;
+  if (!electron?.audioCompressAndRead) {
+    throw new Error("Audio processing is only available in the desktop app.");
+  }
+
+  // Use a single chunk for background to avoid complicated stitching logic on backend for now.
+  // In a production app, the backend should stitch chunks or the frontend should stitch results.
+  const { chunks, mimeType } =
+    await electron.audioCompressAndRead(audioFilePath, 3600); // chunk to 1 hour max
+
+  if (chunks.length === 0) throw new Error("Empty audio file");
+
+  const { buffer, name } = chunks[0];
+  const form = new FormData();
+  form.append("file", new Blob([buffer], { type: mimeType }), name);
+
+  const res = await fetch(`${API_URL}/diarize/background`, {
+    method: "POST",
+    headers: opts.jwt ? { Authorization: `Bearer ${opts.jwt}` } : undefined,
+    body: form,
+    signal: opts.signal,
+  });
+  
+  const result = await res.json();
+  if (!res.ok || result.status === "error") {
+    throw new Error(result.message || "Failed to start background diarization");
+  }
+  
+  return result.job_id;
+}
+
+export async function getDiarizeJobStatus(
+  jobId: string,
+  jwt?: string | null
+): Promise<{ status: string; segments?: DiarizeRow[]; error?: string }> {
+  const res = await fetch(`${API_URL}/jobs/${jobId}`, {
+    headers: jwt ? { Authorization: `Bearer ${jwt}` } : undefined,
+  });
+  const result = await res.json();
+  if (!res.ok) throw new Error(result.detail || "Failed to get job status");
+  
+  return {
+    status: result.job_status,
+    segments: result.merged_transcript || result.segments,
+    error: result.error,
+  };
+}
