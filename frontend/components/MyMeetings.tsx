@@ -331,8 +331,12 @@ export default function MyMeetings() {
             updateMeeting(meeting.id, { jobId: undefined });
             showToast("Background diarization failed: " + result.error);
           }
-        } catch (e) {
-          // just ignore polling errors, keep trying later
+        } catch (e: any) {
+          if (e?.message === "Job not found") {
+            updateMeeting(meeting.id, { jobId: undefined });
+            showToast("Background job not found or expired. Resetting status.");
+          }
+          // just ignore other polling errors, keep trying later
         }
       }
     };
