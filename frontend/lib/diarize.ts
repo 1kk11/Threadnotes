@@ -1,4 +1,4 @@
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const API_URL = process.env.NEXT_PUBLIC_API_URL && process.env.NEXT_PUBLIC_API_URL !== "http://localhost:8000" ? process.env.NEXT_PUBLIC_API_URL : "https://threadnotes-backend-ih96.onrender.com";
 
 export type DiarizeWord = { word: string; start: number; end: number };
 export type DiarizeRow = {

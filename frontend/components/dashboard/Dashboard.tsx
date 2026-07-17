@@ -43,7 +43,7 @@ type MergedTranscriptRow = {
 
 export type CaptureTab = "live" | "upload";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const API_URL = process.env.NEXT_PUBLIC_API_URL && process.env.NEXT_PUBLIC_API_URL !== "http://localhost:8000" ? process.env.NEXT_PUBLIC_API_URL : "https://threadnotes-backend-ih96.onrender.com";
 const stripSpeakerPrefix = (text: string) => text.replace(/^\[.*?\]\s*/, "");
 
 const SPEAKER_HEX = [
