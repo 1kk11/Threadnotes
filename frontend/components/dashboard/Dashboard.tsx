@@ -1556,7 +1556,7 @@ export default function Dashboard() {
               </div>
             </div>
           </div>
-        <div className={`relative z-10 min-h-0 flex-1 ${view !== "mymeetings" ? "hidden" : ""}`}>
+        <div className={`relative z-10 min-h-0 flex-1 ${view !== "meetings" ? "hidden" : ""}`}>
           <MyMeetings />
         </div>
       </main>
