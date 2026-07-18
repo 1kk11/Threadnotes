@@ -1178,8 +1178,7 @@ export default function Dashboard() {
           </span>
         </header>
 
-        {view === "dashboard" ? (
-          <div className="custom-scrollbar relative z-10 flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-3 py-3 lg:gap-4 lg:py-4">
+        <div className={`custom-scrollbar relative z-10 flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-3 py-3 lg:gap-4 lg:py-4 ${view !== "dashboard" ? "hidden" : ""}`}>
             <div className="flex shrink-0 flex-wrap items-end justify-between gap-4 lg:mt-4">
               <div>
                 <h2 className="text-2xl font-bold tracking-tight text-slate-900">
@@ -1557,11 +1556,9 @@ export default function Dashboard() {
               </div>
             </div>
           </div>
-        ) : (
-          <div className="relative z-10 min-h-0 flex-1">
-            <MyMeetings />
-          </div>
-        )}
+        <div className={`relative z-10 min-h-0 flex-1 ${view !== "mymeetings" ? "hidden" : ""}`}>
+          <MyMeetings />
+        </div>
       </main>
 
       {isRecording && view !== "dashboard" && (
