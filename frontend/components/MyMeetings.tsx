@@ -29,6 +29,7 @@ type Meeting = {
   audioMediaUrl?: string;
   highlights?: string[];
   highlightsShown?: boolean;
+  jobId?: string;
 };
 
 type DiarizedRow = {
@@ -340,6 +341,8 @@ export default function MyMeetings() {
         }
       }
     };
+
+    void pollJobs();
 
     const interval = setInterval(() => {
       void pollJobs();
