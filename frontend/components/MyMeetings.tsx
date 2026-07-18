@@ -327,6 +327,9 @@ export default function MyMeetings() {
             // Remove jobId to stop polling
             updateMeeting(meeting.id, { diarized, jobId: undefined });
             showToast("Background diarization completed");
+            
+            const api = typeof window !== "undefined" ? window.electronAPI : undefined;
+            api?.showNotification?.("ThreadNotes", "Your background diarization is complete!");
           } else if (result.status === "failed") {
             // Remove jobId to stop polling, show error
             updateMeeting(meeting.id, { jobId: undefined });

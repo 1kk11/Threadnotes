@@ -28,6 +28,8 @@ declare global {
     windowMinimize: () => void;
     windowMaximizeToggle: () => void;
     windowClose: () => void;
+    windowShow: () => void;
+    showNotification: (title: string, body: string) => void;
     recorderSetActive: (active: boolean) => void;
     recorderSetState: (state: { timeText: string; isPaused: boolean }) => void;
     recorderAction: (action: "pause" | "resume" | "stop") => void;

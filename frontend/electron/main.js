@@ -9,6 +9,9 @@ const {
     dialog,
     desktopCapturer,
     screen,
+    Tray,
+    nativeImage,
+    Notification
 } = require("electron");
 const { spawn } = require("child_process");
 const path = require("path");
@@ -396,8 +399,32 @@ ipcMain.on("window-maximize-toggle", () => {
     else mainWindow.maximize();
 });
 
+ipcMain.on("window-show", () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.show();
+        mainWindow.focus();
+    }
+});
+
 ipcMain.on("window-close", () => {
-    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close();
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.hide();
+});
+
+ipcMain.on("show-notification", (_event, { title, body }) => {
+    const notification = new Notification({
+        title,
+        body,
+        icon: path.join(__dirname, "..", "build", "icon.ico")
+    });
+    
+    notification.on('click', () => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.show();
+            mainWindow.focus();
+        }
+    });
+    
+    notification.show();
 });
 
 function createWindow() {
@@ -426,7 +453,7 @@ function createWindow() {
     win.on("close", (e) => {
         if (win.__allowClose) return;
         e.preventDefault();
-        win.webContents.send("app-close-requested");
+        win.hide();
     });
 
     win.on("minimize", () => {
@@ -510,6 +537,53 @@ app.whenReady().then(async () => {
     } catch (err) {
         console.warn("[build-id] cache-bust check failed:", err);
     }
+
+    // Setup System Tray
+    const iconPath = path.join(__dirname, "..", "build", "icon.ico");
+    const trayIcon = nativeImage.createFromPath(iconPath);
+    const tray = new Tray(trayIcon);
+    
+    const contextMenu = Menu.buildFromTemplate([
+        {
+            label: 'Open ThreadNotes',
+            click: () => {
+                if (mainWindow && !mainWindow.isDestroyed()) {
+                    mainWindow.show();
+                    mainWindow.focus();
+                } else {
+                    createWindow();
+                }
+            }
+        },
+        { type: 'separator' },
+        {
+            label: 'Quit ThreadNotes',
+            click: () => {
+                if (mainWindow && !mainWindow.isDestroyed()) {
+                    mainWindow.__allowClose = true;
+                    // Send close requested so dashboard checks unsaved changes
+                    mainWindow.webContents.send("app-close-requested");
+                } else {
+                    app.quit();
+                }
+            }
+        }
+    ]);
+    
+    tray.setToolTip('ThreadNotes');
+    tray.setContextMenu(contextMenu);
+    
+    tray.on('click', () => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            if (mainWindow.isVisible()) {
+                mainWindow.focus();
+            } else {
+                mainWindow.show();
+            }
+        } else {
+            createWindow();
+        }
+    });
 
     createWindow();
 

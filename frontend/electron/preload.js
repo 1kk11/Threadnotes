@@ -22,7 +22,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
     windowMinimize: () => ipcRenderer.send("window-minimize"),
     windowMaximizeToggle: () => ipcRenderer.send("window-maximize-toggle"),
     windowClose: () => ipcRenderer.send("window-close"),
-
+    windowShow: () => ipcRenderer.send("window-show"),
+    showNotification: (title, body) =>
+        ipcRenderer.send("show-notification", { title, body }),
     recorderSetActive: (active) =>
         ipcRenderer.send("recorder:set-active", active),
     recorderSetState: (state) => ipcRenderer.send("recorder:set-state", state),
