@@ -503,7 +503,21 @@ function createWindow() {
     return win;
 }
 
-app.whenReady().then(async () => {
+app.setAppUserModelId("com.threadnotes.app");
+
+const gotTheLock = app.requestSingleInstanceLock();
+if (!gotTheLock) {
+    app.quit();
+} else {
+    app.on('second-instance', (event, commandLine, workingDirectory) => {
+        if (mainWindow) {
+            if (mainWindow.isMinimized()) mainWindow.restore();
+            if (!mainWindow.isVisible()) mainWindow.show();
+            mainWindow.focus();
+        }
+    });
+
+    app.whenReady().then(async () => {
     // Print exactly where user data is stored, so it's never a mystery.
     console.log("[ThreadNotes] Data folder :", app.getPath("userData"));
     console.log("[ThreadNotes] Recordings  :", getRecordingsDirectory());
@@ -591,6 +605,7 @@ app.whenReady().then(async () => {
         if (BrowserWindow.getAllWindows().length === 0) createWindow();
     });
 });
+}
 
 app.on("window-all-closed", () => {
     closeAllAudioStreams();
