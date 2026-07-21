@@ -52,6 +52,8 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
   const audioCtxRef = useRef<AudioContext | null>(null);
 
   const isPausedRef = useRef<boolean>(false);
+  const isDisconnectedRef = useRef<boolean>(false);
+  const consecutiveFailuresRef = useRef<number>(0);
   const recognizerDeadRef = useRef<boolean>(false);
   const reconnectingRef = useRef<boolean>(false);
   const finishingRef = useRef<boolean>(false);
@@ -184,7 +186,8 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
           );
         }
         if (!isPausedRef.current && !finishingRef.current) {
-          void reconnectRef.current?.();
+          isDisconnectedRef.current = true;
+          consecutiveFailuresRef.current += 1;
         }
       };
 
@@ -229,6 +232,8 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
       });
 
       startRenewalLoop();
+      isDisconnectedRef.current = false;
+      consecutiveFailuresRef.current = 0;
       return true;
     } catch (e: any) {
       callbacksRef.current.onError?.(
@@ -342,6 +347,14 @@ export function useAzureSpeech(initialProps?: UseAzureSpeechProps) {
           else if (average < 30) setAudioQuality("Medium");
           else if (average < 70) setAudioQuality("Good");
           else setAudioQuality("Excellent");
+
+          if (isDisconnectedRef.current && average >= 10 && !reconnectingRef.current && !finishingRef.current) {
+            isDisconnectedRef.current = false; // Prevent multiple overlapping reconnects
+            const delay = Math.min(2000 * Math.pow(2, Math.max(0, consecutiveFailuresRef.current - 1)), 15000);
+            setTimeout(() => {
+              void reconnectRef.current?.();
+            }, delay);
+          }
         }
       }, 1000);
 
