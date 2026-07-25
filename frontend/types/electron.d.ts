@@ -68,6 +68,9 @@ declare global {
     ) => Promise<{ outputPath: string; fileName: string; mediaUrl: string }>;
     onUploadProgress: (callback: (pct: number) => void) => () => void;
     onSaveProgress: (callback: (pct: number) => void) => () => void;
+    startPushReceiver: (senderId: string) => void;
+    onPushToken: (callback: (token: string) => void) => () => void;
+    onPushNotification: (callback: (notification: any) => void) => () => void;
   }
 
   interface Window {

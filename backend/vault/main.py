@@ -10,12 +10,12 @@ import traceback
 import uuid
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import bcrypt
 import jwt
 import httpx
-from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, EmailStr
@@ -1132,6 +1132,7 @@ async def _job_worker_loop():
 async def diarize_background(
     file: UploadFile = File(...),
     user: dict = Depends(get_current_user),
+    fcm_token: Optional[str] = Form(None)
 ):
     try:
         audio_bytes = await file.read()
@@ -1145,7 +1146,8 @@ async def diarize_background(
         blob_client = blob_container.get_blob_client(blob_name)
         blob_client.upload_blob(audio_bytes, overwrite=True)
             
-        fcm_token = user.get("fcm_token") # Or extract from a form field if sent from frontend
+        # Use token from form if provided, else fallback to user object
+        final_fcm_token = fcm_token or user.get("fcm_token")
 
         job_doc = {
             "id": job_id,
@@ -1154,7 +1156,7 @@ async def diarize_background(
             "filename": file.filename or "audio.ogg",
             "content_type": file.content_type or "audio/ogg",
             "user_id": user.get("sub"),
-            "fcm_token": fcm_token,
+            "fcm_token": final_fcm_token,
             "created_at": datetime.now(timezone.utc).isoformat()
         }
         
