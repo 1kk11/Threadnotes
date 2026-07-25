@@ -1075,18 +1075,7 @@ async def transcribe_stream(
     return {"status": "success", "text": text}
 
 
-import firebase_admin
-from firebase_admin import credentials
 
-def init_firebase():
-    try:
-        cred_path = os.getenv("FIREBASE_CREDENTIALS_JSON_PATH", "firebase_credentials.json")
-        if os.path.exists(cred_path) and not firebase_admin._apps:
-            cred = credentials.Certificate(cred_path)
-            firebase_admin.initialize_app(cred)
-            print("Firebase Admin initialized.")
-    except Exception as e:
-        print(f"Firebase init error: {e}")
 @app.get("/")
 async def root():
     return {"status": "ok", "message": "ThreadNotes Cloud Vault is running."}
