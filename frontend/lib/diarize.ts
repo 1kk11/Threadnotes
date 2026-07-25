@@ -160,12 +160,7 @@ export async function diarizeAudioFileBackground(
   const form = new FormData();
   form.append("file", new Blob([buffer], { type: mimeType }), name);
   
-  if (typeof window !== "undefined") {
-    const token = localStorage.getItem("fcm_device_token");
-    if (token) {
-      form.append("fcm_token", token);
-    }
-  }
+
 
   const res = await fetch(`${API_URL}/diarize/background`, {
     method: "POST",

@@ -18,7 +18,6 @@ const path = require("path");
 const fs = require("fs");
 const crypto = require("crypto");
 const { pathToFileURL } = require("url");
-const { setup: setupPushReceiver } = require("electron-push-receiver");
 
 const isDev = !app.isPackaged;
 
@@ -449,8 +448,6 @@ function createWindow() {
     });
 
     Menu.setApplicationMenu(null);
-
-    setupPushReceiver(win.webContents);
 
     mainWindow = win;
     win.__allowClose = false;

@@ -302,66 +302,65 @@ export default function MyMeetings() {
     };
   }, [selectedMeeting, isCalendarOpen]);
 
-  // Listen for Push Notifications from the Electron main process
+  // Connect to Backend WebSocket for Real-time Push Notifications
   useEffect(() => {
     let active = true;
-    const api = typeof window !== "undefined" ? window.electronAPI : undefined;
-    if (!api?.onPushNotification) return;
+    const token = localStorage.getItem("token");
+    if (!token) return;
 
-    const cleanup = api.onPushNotification(async (notification: any) => {
-      // The push notification payload should contain the jobId in its data
-      const jobId = notification?.data?.jobId;
-      if (!jobId) return;
+    // Use ws:// for local HTTP, or wss:// for HTTPS (Render)
+    const wsUrl = process.env.NEXT_PUBLIC_API_URL?.replace(/^http/, "ws") || "ws://localhost:8000";
+    const ws = new WebSocket(`${wsUrl}/ws/${token}`);
 
-      const meeting = meetings.find(m => m.jobId === jobId);
-      if (!meeting) return;
-
-      const token = localStorage.getItem("token");
+    ws.onmessage = async (event) => {
       try {
-        const result = await getDiarizeJobStatus(jobId, token);
-        if (!active) return;
-        
-        if (result.status === "completed" && result.segments) {
-          const diarized = result.segments.map((r: any) => ({
-            speaker: r.speaker,
-            text: r.text,
-            start: r.start,
-            end: r.end,
-            words: r.words,
-          }));
-          updateMeeting(meeting.id, { diarized, jobId: undefined });
-          // Note: main.js handles showing the native OS notification directly
-          showToast("Background diarization completed");
-        } else if (result.status === "failed") {
-          updateMeeting(meeting.id, { jobId: undefined });
-          showToast("Background diarization failed: " + result.error);
+        const data = JSON.parse(event.data);
+        if (data.type === "job_completed" && data.jobId) {
+          const jobId = data.jobId;
+          const meeting = meetings.find(m => m.jobId === jobId);
+          if (!meeting) return;
+
+          const result = await getDiarizeJobStatus(jobId, token);
+          if (!active) return;
+          
+          if (result.status === "completed" && result.segments) {
+            const diarized = result.segments.map((r: any) => ({
+              speaker: r.speaker,
+              text: r.text,
+              start: r.start,
+              end: r.end,
+              words: r.words,
+            }));
+            updateMeeting(meeting.id, { diarized, jobId: undefined });
+            
+            const api = typeof window !== "undefined" ? window.electronAPI : undefined;
+            if (api?.showNotification) {
+              api.showNotification("ThreadNotes", "Background diarization completed!");
+            }
+            showToast("Background diarization completed");
+          } else if (result.status === "failed") {
+            updateMeeting(meeting.id, { jobId: undefined });
+            const api = typeof window !== "undefined" ? window.electronAPI : undefined;
+            if (api?.showNotification) {
+              api.showNotification("ThreadNotes Error", "Background diarization failed: " + result.error);
+            }
+            showToast("Background diarization failed: " + result.error);
+          }
         }
       } catch (e: any) {
-        if (e?.message === "Job not found") {
-          updateMeeting(meeting.id, { jobId: undefined });
-        }
+        console.error("WS error processing message:", e);
       }
-    });
+    };
+
+    ws.onopen = () => {
+      console.log("WebSocket Connected to Backend");
+    };
 
     return () => {
       active = false;
-      cleanup();
+      ws.close();
     };
   }, [meetings]);
-
-  // Request Push Token on mount
-  useEffect(() => {
-    const api = typeof window !== "undefined" ? window.electronAPI : undefined;
-    if (api?.startPushReceiver && api?.onPushToken) {
-      api.startPushReceiver("956483673831");
-      
-      const cleanup = api.onPushToken((token: string) => {
-        // Save token to localStorage so we can send it to the backend when uploading audio
-        localStorage.setItem("fcm_device_token", token);
-      });
-      return cleanup;
-    }
-  }, []);
 
   const processedMeetings = useMemo(() => {
     let filtered = meetings;
