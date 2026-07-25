@@ -96,6 +96,7 @@ def _diagnose_env():
             size,
         )
 
+    init_firebase()
     asyncio.create_task(_job_worker_loop())
 
 
@@ -1038,6 +1039,18 @@ async def transcribe_stream(
     return {"status": "success", "text": text}
 
 
+import firebase_admin
+from firebase_admin import credentials
+
+def init_firebase():
+    try:
+        cred_path = os.getenv("FIREBASE_CREDENTIALS_JSON_PATH", "firebase_credentials.json")
+        if os.path.exists(cred_path) and not firebase_admin._apps:
+            cred = credentials.Certificate(cred_path)
+            firebase_admin.initialize_app(cred)
+            print("Firebase Admin initialized.")
+    except Exception as e:
+        print(f"Firebase init error: {e}")
 @app.get("/")
 async def root():
     return {"status": "ok", "message": "ThreadNotes Cloud Vault is running."}
@@ -1081,6 +1094,25 @@ async def _job_worker_loop():
                         job["merged_transcript"] = segments
                         job["status"] = "completed"
                         
+                        # Send Push Notification via Firebase
+                        try:
+                            fcm_token = job.get("fcm_token")
+                            if fcm_token:
+                                import firebase_admin
+                                from firebase_admin import messaging
+                                # Note: Ensure firebase_admin is initialized somewhere globally
+                                message = messaging.Message(
+                                    notification=messaging.Notification(
+                                        title="ThreadNotes",
+                                        body="Your background diarization is complete!"
+                                    ),
+                                    data={"jobId": job.get("id")},
+                                    token=fcm_token,
+                                )
+                                messaging.send(message)
+                        except Exception as push_err:
+                            print(f"Failed to send push notification: {push_err}")
+                        
                         try:
                             await asyncio.to_thread(blob_client.delete_blob)
                         except Exception:
@@ -1113,6 +1145,8 @@ async def diarize_background(
         blob_client = blob_container.get_blob_client(blob_name)
         blob_client.upload_blob(audio_bytes, overwrite=True)
             
+        fcm_token = user.get("fcm_token") # Or extract from a form field if sent from frontend
+
         job_doc = {
             "id": job_id,
             "status": "pending",
@@ -1120,6 +1154,7 @@ async def diarize_background(
             "filename": file.filename or "audio.ogg",
             "content_type": file.content_type or "audio/ogg",
             "user_id": user.get("sub"),
+            "fcm_token": fcm_token,
             "created_at": datetime.now(timezone.utc).isoformat()
         }
         

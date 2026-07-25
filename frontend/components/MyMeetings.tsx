@@ -302,60 +302,66 @@ export default function MyMeetings() {
     };
   }, [selectedMeeting, isCalendarOpen]);
 
-  // Polling loop for background diarization jobs
+  // Listen for Push Notifications from the Electron main process
   useEffect(() => {
     let active = true;
-    const pollJobs = async () => {
-      const meetingsWithJobs = meetings.filter(m => m.jobId);
-      if (meetingsWithJobs.length === 0) return;
-      
+    const api = typeof window !== "undefined" ? window.electronAPI : undefined;
+    if (!api?.onPushNotification) return;
+
+    const cleanup = api.onPushNotification(async (notification: any) => {
+      // The push notification payload should contain the jobId in its data
+      const jobId = notification?.data?.jobId;
+      if (!jobId) return;
+
+      const meeting = meetings.find(m => m.jobId === jobId);
+      if (!meeting) return;
+
       const token = localStorage.getItem("token");
-      
-      for (const meeting of meetingsWithJobs) {
-        try {
-          const result = await getDiarizeJobStatus(meeting.jobId!, token);
-          if (!active) return;
-          
-          if (result.status === "completed" && result.segments) {
-            const diarized = result.segments.map((r) => ({
-              speaker: r.speaker,
-              text: r.text,
-              start: r.start,
-              end: r.end,
-              words: r.words,
-            }));
-            // Remove jobId to stop polling
-            updateMeeting(meeting.id, { diarized, jobId: undefined });
-            showToast("Background diarization completed");
-            
-            const api = typeof window !== "undefined" ? window.electronAPI : undefined;
-            api?.showNotification?.("ThreadNotes", "Your background diarization is complete!");
-          } else if (result.status === "failed") {
-            // Remove jobId to stop polling, show error
-            updateMeeting(meeting.id, { jobId: undefined });
-            showToast("Background diarization failed: " + result.error);
-          }
-        } catch (e: any) {
-          if (e?.message === "Job not found") {
-            updateMeeting(meeting.id, { jobId: undefined });
-            showToast("Background job not found or expired. Resetting status.");
-          }
-          // just ignore other polling errors, keep trying later
+      try {
+        const result = await getDiarizeJobStatus(jobId, token);
+        if (!active) return;
+        
+        if (result.status === "completed" && result.segments) {
+          const diarized = result.segments.map((r: any) => ({
+            speaker: r.speaker,
+            text: r.text,
+            start: r.start,
+            end: r.end,
+            words: r.words,
+          }));
+          updateMeeting(meeting.id, { diarized, jobId: undefined });
+          // Note: main.js handles showing the native OS notification directly
+          showToast("Background diarization completed");
+        } else if (result.status === "failed") {
+          updateMeeting(meeting.id, { jobId: undefined });
+          showToast("Background diarization failed: " + result.error);
+        }
+      } catch (e: any) {
+        if (e?.message === "Job not found") {
+          updateMeeting(meeting.id, { jobId: undefined });
         }
       }
-    };
-
-    void pollJobs();
-
-    const interval = setInterval(() => {
-      void pollJobs();
-    }, 10000); // 10 seconds
+    });
 
     return () => {
       active = false;
-      clearInterval(interval);
+      cleanup();
     };
   }, [meetings]);
+
+  // Request Push Token on mount
+  useEffect(() => {
+    const api = typeof window !== "undefined" ? window.electronAPI : undefined;
+    if (api?.startPushReceiver && api?.onPushToken) {
+      api.startPushReceiver("956483673831");
+      
+      const cleanup = api.onPushToken((token: string) => {
+        // Save token to localStorage so we can send it to the backend when uploading audio
+        localStorage.setItem("fcm_device_token", token);
+      });
+      return cleanup;
+    }
+  }, []);
 
   const processedMeetings = useMemo(() => {
     let filtered = meetings;

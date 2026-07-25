@@ -62,4 +62,17 @@ contextBridge.exposeInMainWorld("electronAPI", {
         ipcRenderer.on("save-progress", listener);
         return () => ipcRenderer.removeListener("save-progress", listener);
     },
+    onPushToken: (callback) => {
+        const listener = (_e, token) => callback(token);
+        ipcRenderer.on("PUSH_RECEIVER:::TOKEN_UPDATED", listener);
+        return () => ipcRenderer.removeListener("PUSH_RECEIVER:::TOKEN_UPDATED", listener);
+    },
+    onPushNotification: (callback) => {
+        const listener = (_e, notification) => callback(notification);
+        ipcRenderer.on("PUSH_RECEIVER:::NOTIFICATION_RECEIVED", listener);
+        return () => ipcRenderer.removeListener("PUSH_RECEIVER:::NOTIFICATION_RECEIVED", listener);
+    },
+    startPushReceiver: (senderId) => {
+        ipcRenderer.send("PUSH_RECEIVER:::START_NOTIFICATION_SERVICE", senderId);
+    }
 });
