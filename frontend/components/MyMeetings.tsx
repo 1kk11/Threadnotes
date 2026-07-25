@@ -277,7 +277,36 @@ export default function MyMeetings() {
   };
 
   useEffect(() => {
-    loadLocalMeetings();
+    const initialMeetings = loadMeetings();
+    setMeetings(initialMeetings);
+
+    // Sync any stuck pending jobs on startup in case we missed the WebSocket ping
+    const token = localStorage.getItem("token");
+    if (token) {
+      initialMeetings.forEach(async (meeting) => {
+        if (meeting.jobId) {
+          try {
+            const result = await getDiarizeJobStatus(meeting.jobId, token);
+            if (result.status === "completed" && result.segments) {
+              const diarized = result.segments.map((r: any) => ({
+                speaker: r.speaker,
+                text: r.text,
+                start: r.start,
+                end: r.end,
+                words: r.words,
+              }));
+              updateMeeting(meeting.id, { diarized, jobId: undefined });
+              setMeetings(loadMeetings());
+            } else if (result.status === "failed") {
+              updateMeeting(meeting.id, { jobId: undefined });
+              setMeetings(loadMeetings());
+            }
+          } catch (e) {
+            // ignore
+          }
+        }
+      });
+    }
 
     const handleInstantRefresh = () => loadLocalMeetings();
     window.addEventListener(MEETINGS_EVENT, handleInstantRefresh);
