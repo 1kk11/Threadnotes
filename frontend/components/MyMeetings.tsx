@@ -280,33 +280,7 @@ export default function MyMeetings() {
     const initialMeetings = loadMeetings();
     setMeetings(initialMeetings);
 
-    // Sync any stuck pending jobs on startup in case we missed the WebSocket ping
-    const token = localStorage.getItem("token");
-    if (token) {
-      initialMeetings.forEach(async (meeting) => {
-        if (meeting.jobId) {
-          try {
-            const result = await getDiarizeJobStatus(meeting.jobId, token);
-            if (result.status === "completed" && result.segments) {
-              const diarized = result.segments.map((r: any) => ({
-                speaker: r.speaker,
-                text: r.text,
-                start: r.start,
-                end: r.end,
-                words: r.words,
-              }));
-              updateMeeting(meeting.id, { diarized, jobId: undefined });
-              setMeetings(loadMeetings());
-            } else if (result.status === "failed") {
-              updateMeeting(meeting.id, { jobId: undefined });
-              setMeetings(loadMeetings());
-            }
-          } catch (e) {
-            // ignore
-          }
-        }
-      });
-    }
+
 
     const handleInstantRefresh = () => loadLocalMeetings();
     window.addEventListener(MEETINGS_EVENT, handleInstantRefresh);
@@ -331,65 +305,68 @@ export default function MyMeetings() {
     };
   }, [selectedMeeting, isCalendarOpen]);
 
-  // Connect to Backend WebSocket for Real-time Push Notifications
+  // Poll for background job completion (handles Render's 55s WebSocket timeout)
   useEffect(() => {
     let active = true;
     const token = localStorage.getItem("token");
     if (!token) return;
 
-    // Use ws:// for local HTTP, or wss:// for HTTPS (Render)
-    const wsUrl = process.env.NEXT_PUBLIC_API_URL?.replace(/^http/, "ws") || "ws://localhost:8000";
-    const ws = new WebSocket(`${wsUrl}/ws/${token}`);
+    const checkPendingJobs = async () => {
+      const currentMeetings = loadMeetings();
+      let changed = false;
 
-    ws.onmessage = async (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        if (data.type === "job_completed" && data.jobId) {
-          const jobId = data.jobId;
-          const meeting = meetings.find(m => m.jobId === jobId);
-          if (!meeting) return;
-
-          const result = await getDiarizeJobStatus(jobId, token);
-          if (!active) return;
-          
-          if (result.status === "completed" && result.segments) {
-            const diarized = result.segments.map((r: any) => ({
-              speaker: r.speaker,
-              text: r.text,
-              start: r.start,
-              end: r.end,
-              words: r.words,
-            }));
-            updateMeeting(meeting.id, { diarized, jobId: undefined });
-            
-            const api = typeof window !== "undefined" ? window.electronAPI : undefined;
-            if (api?.showNotification) {
-              api.showNotification("ThreadNotes", "Background diarization completed!");
+      for (const meeting of currentMeetings) {
+        if (meeting.jobId && active) {
+          try {
+            const result = await getDiarizeJobStatus(meeting.jobId, token);
+            if (result.status === "completed" && result.segments) {
+              const diarized = result.segments.map((r: any) => ({
+                speaker: r.speaker,
+                text: r.text,
+                start: r.start,
+                end: r.end,
+                words: r.words,
+              }));
+              updateMeeting(meeting.id, { diarized, jobId: undefined });
+              changed = true;
+              
+              const api = typeof window !== "undefined" ? window.electronAPI : undefined;
+              if (api?.showNotification) {
+                api.showNotification("ThreadNotes", "Background diarization completed!");
+              }
+              showToast("Background diarization completed");
+            } else if (result.status === "failed") {
+              updateMeeting(meeting.id, { jobId: undefined });
+              changed = true;
+              
+              const api = typeof window !== "undefined" ? window.electronAPI : undefined;
+              if (api?.showNotification) {
+                api.showNotification("ThreadNotes Error", "Background diarization failed: " + result.error);
+              }
+              showToast("Background diarization failed: " + result.error);
             }
-            showToast("Background diarization completed");
-          } else if (result.status === "failed") {
-            updateMeeting(meeting.id, { jobId: undefined });
-            const api = typeof window !== "undefined" ? window.electronAPI : undefined;
-            if (api?.showNotification) {
-              api.showNotification("ThreadNotes Error", "Background diarization failed: " + result.error);
-            }
-            showToast("Background diarization failed: " + result.error);
+          } catch (e) {
+            // ignore network errors during polling
           }
         }
-      } catch (e: any) {
-        console.error("WS error processing message:", e);
+      }
+
+      if (changed && active) {
+        setMeetings(loadMeetings());
       }
     };
 
-    ws.onopen = () => {
-      console.log("WebSocket Connected to Backend");
-    };
+    // Initial check on mount
+    checkPendingJobs();
+
+    // Poll every 15 seconds
+    const interval = setInterval(checkPendingJobs, 15000);
 
     return () => {
       active = false;
-      ws.close();
+      clearInterval(interval);
     };
-  }, [meetings]);
+  }, []);
 
   const processedMeetings = useMemo(() => {
     let filtered = meetings;
