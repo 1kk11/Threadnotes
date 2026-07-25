@@ -15,10 +15,11 @@ from typing import Dict, List, Optional
 import bcrypt
 import jwt
 import httpx
-from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, Form
+from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, Form, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, EmailStr
+
 from azure.cosmos import CosmosClient
 from dotenv import load_dotenv
 
@@ -59,6 +60,42 @@ app.add_middleware(
 logging.basicConfig(level=logging.INFO)
 _env_log = logging.getLogger("threadnotes.env")
 
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: Dict[str, WebSocket] = {}
+
+    async def connect(self, user_id: str, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections[user_id] = websocket
+
+    def disconnect(self, user_id: str):
+        self.active_connections.pop(user_id, None)
+
+    async def send_personal_message(self, message: dict, user_id: str):
+        websocket = self.active_connections.get(user_id)
+        if websocket:
+            await websocket.send_json(message)
+
+manager = ConnectionManager()
+
+@app.websocket("/ws/{token}")
+async def websocket_endpoint(websocket: WebSocket, token: str):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id = payload.get("sub")
+        if not user_id:
+            await websocket.close(code=1008)
+            return
+    except Exception:
+        await websocket.close(code=1008)
+        return
+        
+    await manager.connect(user_id, websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        manager.disconnect(user_id)
 
 @app.on_event("startup")
 def _diagnose_env():
@@ -96,7 +133,6 @@ def _diagnose_env():
             size,
         )
 
-    init_firebase()
     asyncio.create_task(_job_worker_loop())
 
 
@@ -1094,24 +1130,13 @@ async def _job_worker_loop():
                         job["merged_transcript"] = segments
                         job["status"] = "completed"
                         
-                        # Send Push Notification via Firebase
+                        # Notify via WebSocket
                         try:
-                            fcm_token = job.get("fcm_token")
-                            if fcm_token:
-                                import firebase_admin
-                                from firebase_admin import messaging
-                                # Note: Ensure firebase_admin is initialized somewhere globally
-                                message = messaging.Message(
-                                    notification=messaging.Notification(
-                                        title="ThreadNotes",
-                                        body="Your background diarization is complete!"
-                                    ),
-                                    data={"jobId": job.get("id")},
-                                    token=fcm_token,
-                                )
-                                messaging.send(message)
-                        except Exception as push_err:
-                            print(f"Failed to send push notification: {push_err}")
+                            user_id = job.get("user_id")
+                            if user_id:
+                                await manager.send_personal_message({"type": "job_completed", "jobId": job.get("id")}, user_id)
+                        except Exception as ws_err:
+                            print(f"Failed to send WS notification: {ws_err}")
                         
                         try:
                             await asyncio.to_thread(blob_client.delete_blob)
@@ -1131,8 +1156,7 @@ async def _job_worker_loop():
 @app.post("/diarize/background")
 async def diarize_background(
     file: UploadFile = File(...),
-    user: dict = Depends(get_current_user),
-    fcm_token: Optional[str] = Form(None)
+    user: dict = Depends(get_current_user)
 ):
     try:
         audio_bytes = await file.read()
@@ -1145,9 +1169,6 @@ async def diarize_background(
         blob_container = get_blob_container()
         blob_client = blob_container.get_blob_client(blob_name)
         blob_client.upload_blob(audio_bytes, overwrite=True)
-            
-        # Use token from form if provided, else fallback to user object
-        final_fcm_token = fcm_token or user.get("fcm_token")
 
         job_doc = {
             "id": job_id,
@@ -1156,7 +1177,6 @@ async def diarize_background(
             "filename": file.filename or "audio.ogg",
             "content_type": file.content_type or "audio/ogg",
             "user_id": user.get("sub"),
-            "fcm_token": final_fcm_token,
             "created_at": datetime.now(timezone.utc).isoformat()
         }
         
