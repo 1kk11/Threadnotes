@@ -12,7 +12,7 @@ function SplashScreen({ progress }: { progress: number }) {
     <div className="relative flex h-full w-full items-center justify-center overflow-hidden bg-slate-50">
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
-        src="/cover.jpeg"
+        src="/cr4.png"
         alt="ThreadNotes"
         className="absolute inset-0 h-full w-full object-cover"
       />

@@ -136,7 +136,7 @@ export default function CaptureControls({
               <span className="text-[11px] font-semibold uppercase tracking-wider text-violet-500">
                 Diarizing
               </span>
-              <span className="font-mono text-xs font-bold tabular-nums text-slate-600">
+              <span className="text-[11px] font-semibold tabular-nums text-slate-600">
                 {Math.round(Math.min(100, Math.max(0, diarizeProgress)))}%
               </span>
             </div>
@@ -157,7 +157,7 @@ export default function CaptureControls({
               <span className="text-[11px] font-semibold uppercase tracking-wider text-violet-500">
                 Finishing
               </span>
-              <span className="font-mono text-xs font-bold tabular-nums text-slate-600">
+              <span className="text-[11px] font-semibold tabular-nums text-slate-600">
                 {Math.round(Math.min(100, Math.max(0, finishProgress)))}%
               </span>
             </div>
@@ -180,7 +180,7 @@ export default function CaptureControls({
                   ? "Transcribing"
                   : "Uploading"}
               </span>
-              <span className="font-mono text-xs font-bold tabular-nums text-slate-600">
+              <span className="text-[11px] font-semibold tabular-nums text-slate-600">
                 {Math.round(Math.min(100, Math.max(0, uploadProgress)))}%
               </span>
             </div>
@@ -201,7 +201,7 @@ export default function CaptureControls({
               <span className="text-[11px] font-semibold uppercase tracking-wider text-violet-500">
                 Saving
               </span>
-              <span className="font-mono text-xs font-bold tabular-nums text-slate-600">
+              <span className="text-[11px] font-semibold tabular-nums text-slate-600">
                 {Math.round(Math.min(100, Math.max(0, saveProgress)))}%
               </span>
             </div>
@@ -505,7 +505,7 @@ export default function CaptureControls({
                   <span className="text-[11px] font-semibold uppercase tracking-wider text-violet-500">
                     Uploading
                   </span>
-                  <span className="font-mono text-xs font-bold tabular-nums text-slate-600">
+                  <span className="text-[11px] font-semibold tabular-nums text-slate-600">
                     {Math.round(Math.min(100, Math.max(0, fileUploadPct)))}%
                   </span>
                 </div>

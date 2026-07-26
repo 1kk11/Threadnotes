@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import InfoModal from "@/components/ui/InfoModal";
 import { getValidToken } from "@/lib/auth";
+import { Eye, EyeOff } from "lucide-react";
 
 export default function AuthPage() {
   const [authMode, setAuthMode] = useState<"login" | "signup" | "forgot">(
@@ -20,6 +21,8 @@ export default function AuthPage() {
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [otp, setOtp] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -390,23 +393,37 @@ export default function AuthPage() {
                     </button>
                   )}
                 </div>
-                <input
-                  type="password"
-                  className={`w-full px-4 py-3.5 border rounded-xl text-sm font-medium focus:ring-4 focus:ring-indigo-500/10 focus:border-indigo-500 outline-none transition-all ${
-                    authMode === "signup" && !isEmailVerified
-                      ? "bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed opacity-60"
-                      : "bg-slate-50 border-slate-200 text-slate-900 focus:bg-white"
-                  }`}
-                  placeholder={
-                    authMode === "signup" && !isEmailVerified
-                      ? "Verify email to unlock"
-                      : "••••••••"
-                  }
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  required
-                  disabled={authMode === "signup" && !isEmailVerified}
-                />
+                <div className="relative flex items-center">
+                  <input
+                    type={showPassword ? "text" : "password"}
+                    className={`w-full px-4 py-3.5 pr-12 border rounded-xl text-sm font-medium focus:ring-4 focus:ring-indigo-500/10 focus:border-indigo-500 outline-none transition-all ${
+                      authMode === "signup" && !isEmailVerified
+                        ? "bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed opacity-60"
+                        : "bg-slate-50 border-slate-200 text-slate-900 focus:bg-white"
+                    }`}
+                    placeholder={
+                      authMode === "signup" && !isEmailVerified
+                        ? "Verify email to unlock"
+                        : "••••••••"
+                    }
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    required
+                    disabled={authMode === "signup" && !isEmailVerified}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-4 text-slate-400 hover:text-slate-600 focus:outline-none"
+                    disabled={authMode === "signup" && !isEmailVerified}
+                  >
+                    {showPassword ? (
+                      <EyeOff className="w-5 h-5" />
+                    ) : (
+                      <Eye className="w-5 h-5" />
+                    )}
+                  </button>
+                </div>
               </div>
             )}
 
@@ -415,14 +432,27 @@ export default function AuthPage() {
                 <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
                   Confirm New Password
                 </label>
-                <input
-                  type="password"
-                  className="w-full px-4 py-3.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium text-slate-900 focus:bg-white focus:ring-4 focus:ring-indigo-500/10 focus:border-indigo-500 outline-none transition-all placeholder:text-slate-400"
-                  placeholder="••••••••"
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
-                  required
-                />
+                <div className="relative flex items-center">
+                  <input
+                    type={showConfirmPassword ? "text" : "password"}
+                    className="w-full px-4 py-3.5 pr-12 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium text-slate-900 focus:bg-white focus:ring-4 focus:ring-indigo-500/10 focus:border-indigo-500 outline-none transition-all placeholder:text-slate-400"
+                    placeholder="••••••••"
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    required
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                    className="absolute right-4 text-slate-400 hover:text-slate-600 focus:outline-none"
+                  >
+                    {showConfirmPassword ? (
+                      <EyeOff className="w-5 h-5" />
+                    ) : (
+                      <Eye className="w-5 h-5" />
+                    )}
+                  </button>
+                </div>
               </div>
             )}
 
