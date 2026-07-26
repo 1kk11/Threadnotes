@@ -510,7 +510,7 @@ function createWindow() {
     return win;
 }
 
-app.setAppUserModelId("com.threadnotes.app");
+app.setAppUserModelId("com.threadnotes.desktop");
 
 // Configure auto-launch on system boot
 if (process.defaultApp === false) { // Don't auto-launch in development mode
