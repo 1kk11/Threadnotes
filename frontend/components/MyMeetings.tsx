@@ -953,8 +953,8 @@ export default function MyMeetings() {
                   {diarizing
                     ? `Diarizing… ${Math.round(diarizeProgress)}%`
                     : detailView === "diarize"
-                      ? "Diarize"
-                      : "Transcript"}
+                      ? "Transcript"
+                      : "Diarize"}
                 </span>
               </button>
             </div>
