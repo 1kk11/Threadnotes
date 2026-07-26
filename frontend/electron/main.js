@@ -460,6 +460,9 @@ function createWindow() {
     win.on("minimize", () => {
         if (recordingActive) showRecorderWidget();
     });
+    win.on("blur", () => {
+        if (recordingActive) showRecorderWidget();
+    });
     win.on("restore", () => hideRecorderWidget());
     win.on("focus", () => hideRecorderWidget());
     win.on("closed", () => {
@@ -470,7 +473,10 @@ function createWindow() {
 
     win.once("ready-to-show", () => {
         win.maximize();
-        win.show();
+        // If launched silently on system boot, don't show the window, just run in background
+        if (!process.argv.includes("--hidden")) {
+            win.show();
+        }
     });
 
     const ZOOM_STEP = 0.1;
@@ -505,6 +511,16 @@ function createWindow() {
 }
 
 app.setAppUserModelId("com.threadnotes.app");
+
+// Configure auto-launch on system boot
+if (process.defaultApp === false) { // Don't auto-launch in development mode
+    app.setLoginItemSettings({
+        openAtLogin: true,
+        args: [
+            '--hidden'
+        ]
+    });
+}
 
 const gotTheLock = app.requestSingleInstanceLock();
 if (!gotTheLock) {

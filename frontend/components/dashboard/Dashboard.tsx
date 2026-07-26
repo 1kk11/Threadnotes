@@ -185,6 +185,25 @@ export default function Dashboard() {
     [stopSmoothProgress],
   );
 
+  const handleUploadProgress = useCallback(
+    (done: number, total: number) => {
+      const t = total > 0 ? total : 1;
+      const base = (done / t) * 100;
+      setUploadProgress((p) => (base > p ? base : p));
+      stopSmoothProgress();
+      if (done >= t) return;
+      const next = ((done + 1) / t) * 100;
+      const startT = Date.now();
+      progressTimerRef.current = setInterval(() => {
+        const elapsed = Date.now() - startT;
+        const frac = elapsed / (elapsed + 30000);
+        const val = base + (next - base) * frac;
+        setUploadProgress((p) => (val > p ? val : p));
+      }, 200);
+    },
+    [stopSmoothProgress],
+  );
+
   const handleAzurePartial = useCallback((text: string) => {
     if (!liveRef.current) return;
     interimRef.current = text;
@@ -699,8 +718,8 @@ export default function Dashboard() {
       const text = await transcribeAudioFile(localPath, {
         jwt: token,
         onProgress: (doneN, total) => {
-          if (total > 0 && sid === sessionIdRef.current) {
-            setUploadProgress(Math.round((doneN / total) * 100));
+          if (sid === sessionIdRef.current) {
+            handleUploadProgress(doneN, total);
           }
         },
       });
@@ -928,10 +947,12 @@ export default function Dashboard() {
     
     const token = localStorage.getItem("token");
     setIsDiarizing(true);
+    handleDiarizeProgress(0, 1);
     setStatusMessage("Starting background diarization...");
     try {
       const jobId = await diarizeAudioFileBackground(audioFilePath, { jwt: token });
       
+      handleDiarizeProgress(1, 1);
       // Update the meeting in local storage with the jobId
       updateMeeting(currentMeetingId, { jobId });
       

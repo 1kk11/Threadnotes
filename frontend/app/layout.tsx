@@ -5,6 +5,7 @@ import AuthInterceptor from "@/components/AuthInterceptor";
 import WindowControls from "@/components/WindowControls";
 import { GlobalAudioProvider } from "@/components/GlobalAudioProvider";
 import { GlobalRecordingProvider } from "@/components/GlobalRecordingProvider";
+import { GlobalJobPoller } from "@/components/GlobalJobPoller";
 
 const sora = Sora({
   subsets: ["latin"],
@@ -41,6 +42,7 @@ export default function RootLayout({
               </div>
               <div className="relative min-h-0 w-full flex-1 overflow-hidden">
                 <AuthInterceptor />
+                <GlobalJobPoller />
                 {children}
               </div>
             </div>
