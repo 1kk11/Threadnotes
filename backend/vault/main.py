@@ -141,7 +141,7 @@ def get_jobs_container():
 async def update_meeting_stats_with_etag(meeting_id: str, processing_delta: int = 0, completed_delta: int = 0, failed_delta: int = 0):
     """Optimistically update chunk stats and check if all chunks are done."""
     jobs_cont = await asyncio.to_thread(get_jobs_container)
-    from azure.core.match_conditions import MatchConditions
+    from azure.core import MatchConditions
     import azure.core.exceptions
     
     max_retries = 5
