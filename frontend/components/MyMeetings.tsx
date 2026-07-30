@@ -329,8 +329,10 @@ export default function MyMeetings() {
           if (!res.ok) continue;
           const data = await res.json();
           
-          if (data.status === "completed" && data.transcript) {
-            const updatedRows = Array.isArray(data.transcript) ? data.transcript : [];
+          if (data.job_status === "COMPLETED" && (data.merged_transcript || data.segments)) {
+            const updatedRows = Array.isArray(data.merged_transcript) && data.merged_transcript.length > 0 
+                ? data.merged_transcript 
+                : (Array.isArray(data.segments) ? data.segments : []);
             const plainText = updatedRows.map((r: any) => `${r.speaker}: ${r.text}`).join("\n\n");
             
             updateMeeting(m.id, {
@@ -340,11 +342,11 @@ export default function MyMeetings() {
             loadLocalMeetings();
           } else {
              const t = data.total_chunks > 0 ? data.total_chunks : 1;
-             const pct = data.status === "pending" ? 0 : Math.round((data.completed_chunks / t) * 100);
+             const pct = data.job_status === "PENDING" ? 0 : Math.round((data.completed_chunks / t) * 100);
              setJobProgress(prev => ({
                ...prev,
                [m.id]: { 
-                 status: data.status, 
+                 status: data.job_status === "FAILED" ? "error" : data.job_status?.toLowerCase() || "pending", 
                  pct: Math.min(100, Math.max(0, pct)),
                  processing: data.processing_chunks || 0,
                  completed: data.completed_chunks || 0,
