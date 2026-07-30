@@ -147,7 +147,7 @@ function closeAllAudioStreams() {
     }
 }
 
-const DEV_URL = "http://localhost:3000";
+const DEV_URL = "http://localhost:3005";
 const OUT_DIR = path.join(__dirname, "..", "out");
 
 const APP_SCHEME = "app";
