@@ -19,7 +19,7 @@ import CaptureControls from "./CaptureControls";
 import TranscriptArea from "./TranscriptArea";
 import { loadMeetings, addMeeting, updateMeeting, MEETINGS_EVENT } from "@/lib/meetingStore";
 import { getUserName, clearSession } from "@/lib/auth";
-import { diarizeAudioFile, transcribeAudioFile, diarizeAudioFileBackground } from "@/lib/diarize";
+import { diarizeAudioFile, transcribeAudioFile } from "@/lib/diarize";
 import ConfirmModal from "@/components/ui/ConfirmModal";
 import ScrollNav from "@/components/ui/ScrollNav";
 import AudioPlayer from "@/components/ui/AudioPlayer";
@@ -605,6 +605,14 @@ export default function Dashboard() {
       setIsSaved(false);
       void saveTranscriptLocally(rows);
       setStatusMessage("Speakers separated — click Save to keep it.");
+      
+      const electron = typeof window !== "undefined" ? (window as any).electronAPI : undefined;
+      if (electron?.showNotification) {
+        electron.showNotification(
+          "Diarization Complete",
+          "Your audio has been separated by speakers successfully."
+        );
+      }
     } catch (e: any) {
       stopSmoothProgress();
       if (sid !== sessionIdRef.current) return;
@@ -928,41 +936,7 @@ export default function Dashboard() {
     getRecordingFilePath,
   ]);
 
-  const handleDiarizeBG = useCallback(async () => {
-    if (!audioFilePath || isDiarizing || mergedTranscript.length > 0) {
-      return;
-    }
-    
-    let currentMeetingId = savedMeetingId;
-    // We must save the meeting first if it's not saved, so it has an ID
-    if (!currentMeetingId) {
-      setStatusMessage("Saving meeting before starting background job...");
-      currentMeetingId = await handleSaveTranscript() ?? null;
-    }
-    
-    if (!currentMeetingId) {
-      setStatusMessage("⚠️ Could not save meeting");
-      return;
-    }
-    
-    const token = localStorage.getItem("token");
-    setIsDiarizing(true);
-    handleDiarizeProgress(0, 1);
-    setStatusMessage("Starting background diarization...");
-    try {
-      const jobId = await diarizeAudioFileBackground(audioFilePath, { jwt: token });
-      
-      handleDiarizeProgress(1, 1);
-      // Update the meeting in local storage with the jobId
-      updateMeeting(currentMeetingId, { jobId });
-      
-      setStatusMessage("Diarizing in background... you can safely close this meeting.");
-    } catch (e: any) {
-      setStatusMessage(e?.message || "⚠️ Failed to start background diarization");
-    } finally {
-      setIsDiarizing(false);
-    }
-  }, [audioFilePath, isDiarizing, mergedTranscript.length, savedMeetingId, handleSaveTranscript]);
+
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -1351,14 +1325,6 @@ export default function Dashboard() {
                                 className="shrink-0 rounded-lg bg-linear-to-r from-[#2FB5AA] to-[#2E6DBE] px-4 py-1.5 text-xs font-semibold text-white shadow-sm transition-all hover:from-[#28a29a] hover:to-[#2a61a8] disabled:cursor-not-allowed disabled:opacity-60"
                               >
                                 {isDiarizing ? "Diarizing…" : "Diarize"}
-                              </button>
-                              <button
-                                onClick={handleDiarizeBG}
-                                disabled={isDiarizing || !audioFilePath}
-                                className="shrink-0 rounded-lg bg-linear-to-r from-violet-500 to-indigo-500 px-4 py-1.5 text-xs font-semibold text-white shadow-sm transition-all hover:from-violet-600 hover:to-indigo-600 disabled:cursor-not-allowed disabled:opacity-60"
-                                title="Run in the cloud so you can close this window"
-                              >
-                                Diarize in BG
                               </button>
                             </div>
                           ) : transcriptText ? (

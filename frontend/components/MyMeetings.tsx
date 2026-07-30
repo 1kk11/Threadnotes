@@ -12,7 +12,7 @@ import {
   updateMeeting,
   MEETINGS_EVENT,
 } from "@/lib/meetingStore";
-import { diarizeAudioFile, getDiarizeJobStatus } from "@/lib/diarize";
+import { diarizeAudioFile } from "@/lib/diarize";
 import AudioPlayer from "@/components/ui/AudioPlayer";
 
 type TranscriptEntry = { speaker: string; text: string; timestamp: string };
@@ -725,12 +725,6 @@ export default function MyMeetings() {
                             minute: "2-digit",
                           })}
                         </span>
-                        {meeting.jobId && (
-                          <>
-                            <span className="w-1 h-1 bg-slate-300 rounded-full"></span>
-                            <span className="text-violet-500 font-bold animate-pulse">Diarizing in background...</span>
-                          </>
-                        )}
                       </div>
                     </div>
 
