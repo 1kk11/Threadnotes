@@ -15,6 +15,9 @@ import {
 import { diarizeAudioFile } from "@/lib/diarize";
 import AudioPlayer from "@/components/ui/AudioPlayer";
 
+const API_URL = process.env.NEXT_PUBLIC_API_URL && process.env.NEXT_PUBLIC_API_URL !== "http://localhost:8000" ? process.env.NEXT_PUBLIC_API_URL : "https://threadnotes-backend-ih96.onrender.com";
+
+
 type TranscriptEntry = { speaker: string; text: string; timestamp: string };
 type Meeting = {
   id: string;
@@ -122,6 +125,9 @@ export default function MyMeetings() {
     null,
   );
   const [mtgSpeakerDraft, setMtgSpeakerDraft] = useState("");
+
+  const [jobProgress, setJobProgress] = useState<Record<string, {status: string, pct: number, processing?: number, completed?: number, failed?: number, total?: number}>>({});
+
 
   const searchInputRef = useRef<HTMLInputElement>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -304,6 +310,58 @@ export default function MyMeetings() {
       document.removeEventListener("keydown", handleKeyDown);
     };
   }, [selectedMeeting, isCalendarOpen]);
+
+  // Poll for background job progress
+  useEffect(() => {
+    const pendingMeetings = meetings.filter(
+      (m) => (!m.transcript || m.transcript.length === 0) && !m.plainText && !m.diarized
+    );
+    
+    if (pendingMeetings.length === 0) return;
+
+    const interval = setInterval(async () => {
+      const token = localStorage.getItem("token");
+      for (const m of pendingMeetings) {
+        try {
+          const res = await fetch(`${API_URL}/jobs/${m.id}/progress`, {
+            headers: token ? { Authorization: `Bearer ${token}` } : {},
+          });
+          if (!res.ok) continue;
+          const data = await res.json();
+          
+          if (data.status === "completed" && data.transcript) {
+            const updatedRows = Array.isArray(data.transcript) ? data.transcript : [];
+            const plainText = updatedRows.map((r: any) => `${r.speaker}: ${r.text}`).join("\n\n");
+            
+            updateMeeting(m.id, {
+               diarized: updatedRows,
+               plainText: plainText
+            });
+            loadLocalMeetings();
+          } else {
+             const t = data.total_chunks > 0 ? data.total_chunks : 1;
+             const pct = data.status === "pending" ? 0 : Math.round((data.completed_chunks / t) * 100);
+             setJobProgress(prev => ({
+               ...prev,
+               [m.id]: { 
+                 status: data.status, 
+                 pct: Math.min(100, Math.max(0, pct)),
+                 processing: data.processing_chunks || 0,
+                 completed: data.completed_chunks || 0,
+                 failed: data.failed_chunks || 0,
+                 total: data.total_chunks || 0
+               }
+             }));
+          }
+        } catch (e) {
+          console.error("Poll error", e);
+        }
+      }
+    }, 5000);
+
+    return () => clearInterval(interval);
+  }, [meetings]);
+
 
 
   const processedMeetings = useMemo(() => {
@@ -729,12 +787,43 @@ export default function MyMeetings() {
                     </div>
 
                     <div className="flex items-center gap-2 w-full md:w-auto shrink-0 flex-wrap sm:flex-nowrap">
-                      <button
-                        onClick={() => openMeeting(meeting)}
-                        className="flex-1 sm:flex-none text-xs font-bold text-indigo-600 bg-indigo-50 border border-indigo-100 px-4 py-2 rounded-lg hover:bg-indigo-600 hover:text-white transition-all shadow-sm whitespace-nowrap"
-                      >
-                        View Transcript
-                      </button>
+                      {((!meeting.transcript || meeting.transcript.length === 0) && !meeting.plainText && !meeting.diarized) ? (
+                        <div className="flex-1 sm:flex-none flex flex-col gap-1.5 min-w-[150px]">
+                           {jobProgress[meeting.id]?.status === "error" ? (
+                             <span className="text-xs font-bold text-red-500">Processing Failed</span>
+                           ) : (
+                             <>
+                               <div className="flex items-center gap-2">
+                                 <div className="flex-1 h-2 bg-slate-100 rounded-full overflow-hidden">
+                                   <div 
+                                     className="h-full bg-linear-to-r from-violet-500 to-blue-500 transition-all duration-500" 
+                                     style={{ width: `${jobProgress[meeting.id]?.pct || 0}%` }}
+                                   />
+                                 </div>
+                                 <span className="text-xs font-semibold text-slate-500 whitespace-nowrap w-8 text-right">
+                                   {jobProgress[meeting.id]?.pct || 0}%
+                                 </span>
+                               </div>
+                               {(jobProgress[meeting.id]?.total ?? 0) > 0 && (
+                                 <div className="flex items-center justify-between text-[10px] font-medium text-slate-400">
+                                   <span title="Completed chunks">{jobProgress[meeting.id]?.completed || 0} done</span>
+                                   <span title="Processing chunks">{jobProgress[meeting.id]?.processing || 0} proc</span>
+                                   {(jobProgress[meeting.id]?.failed ?? 0) > 0 && (
+                                     <span className="text-red-400" title="Failed chunks">{jobProgress[meeting.id]?.failed} failed</span>
+                                   )}
+                                 </div>
+                               )}
+                             </>
+                           )}
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => openMeeting(meeting)}
+                          className="flex-1 sm:flex-none text-xs font-bold text-indigo-600 bg-indigo-50 border border-indigo-100 px-4 py-2 rounded-lg hover:bg-indigo-600 hover:text-white transition-all shadow-sm whitespace-nowrap"
+                        >
+                          View Transcript
+                        </button>
+                      )}
                       <button
                         onClick={(e) => {
                           e.stopPropagation();

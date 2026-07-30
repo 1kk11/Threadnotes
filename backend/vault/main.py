@@ -60,42 +60,7 @@ app.add_middleware(
 logging.basicConfig(level=logging.INFO)
 _env_log = logging.getLogger("threadnotes.env")
 
-class ConnectionManager:
-    def __init__(self):
-        self.active_connections: Dict[str, WebSocket] = {}
-
-    async def connect(self, user_id: str, websocket: WebSocket):
-        await websocket.accept()
-        self.active_connections[user_id] = websocket
-
-    def disconnect(self, user_id: str):
-        self.active_connections.pop(user_id, None)
-
-    async def send_personal_message(self, message: dict, user_id: str):
-        websocket = self.active_connections.get(user_id)
-        if websocket:
-            await websocket.send_json(message)
-
-manager = ConnectionManager()
-
-@app.websocket("/ws/{token}")
-async def websocket_endpoint(websocket: WebSocket, token: str):
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        user_id = payload.get("sub")
-        if not user_id:
-            await websocket.close(code=1008)
-            return
-    except Exception:
-        await websocket.close(code=1008)
-        return
-        
-    await manager.connect(user_id, websocket)
-    try:
-        while True:
-            await websocket.receive_text()
-    except WebSocketDisconnect:
-        manager.disconnect(user_id)
+chunk_queue = asyncio.Queue()
 
 @app.on_event("startup")
 def _diagnose_env():
@@ -133,7 +98,8 @@ def _diagnose_env():
             size,
         )
 
-    asyncio.create_task(_job_worker_loop())
+    asyncio.create_task(background_worker_pool())
+    asyncio.create_task(dcp_startup_recovery())
 
 
 security = HTTPBearer(auto_error=True)
@@ -158,7 +124,6 @@ def get_users_container():
 
 _jobs_cont = None
 
-
 def get_jobs_container():
     global _jobs_cont
     if _jobs_cont is None:
@@ -172,6 +137,47 @@ def get_jobs_container():
         except Exception:
             _jobs_cont = database.get_container_client(JOBS_CONTAINER)
     return _jobs_cont
+
+async def update_meeting_stats_with_etag(meeting_id: str, processing_delta: int = 0, completed_delta: int = 0, failed_delta: int = 0):
+    """Optimistically update chunk stats and check if all chunks are done."""
+    jobs_cont = await asyncio.to_thread(get_jobs_container)
+    from azure.core.match_conditions import MatchConditions
+    import azure.core.exceptions
+    
+    max_retries = 5
+    for _ in range(max_retries):
+        try:
+            meeting_job = await asyncio.to_thread(jobs_cont.read_item, item=meeting_id, partition_key=meeting_id)
+            if meeting_job.get("status") in ["COMPLETED", "CANCELLED"]:
+                return meeting_job
+            
+            meeting_job["processing_chunks"] = max(0, meeting_job.get("processing_chunks", 0) + processing_delta)
+            meeting_job["completed_chunks"] = max(0, meeting_job.get("completed_chunks", 0) + completed_delta)
+            meeting_job["failed_chunks"] = max(0, meeting_job.get("failed_chunks", 0) + failed_delta)
+            
+            should_aggregate = False
+            if meeting_job["completed_chunks"] == meeting_job.get("total_chunks", 0) and meeting_job.get("total_chunks", 0) > 0:
+                meeting_job["status"] = "MERGING"
+                should_aggregate = True
+                
+            updated_job = await asyncio.to_thread(
+                jobs_cont.replace_item,
+                item=meeting_id,
+                body=meeting_job,
+                etag=meeting_job.get("_etag"),
+                match_condition=MatchConditions.IfNotModified
+            )
+            updated_job["_should_aggregate"] = should_aggregate
+            return updated_job
+        except azure.core.exceptions.ResourceModifiedError:
+            await asyncio.sleep(0.5)
+            continue
+        except Exception as e:
+            if "PreconditionFailed" in str(e) or "412" in str(e):
+                await asyncio.sleep(0.5)
+                continue
+            raise
+    raise Exception("Failed to update meeting job after max retries")
 
 
 _blob_client = None
@@ -1081,127 +1087,222 @@ async def root():
     return {"status": "ok", "message": "ThreadNotes Cloud Vault is running."}
 
 
-async def _job_worker_loop():
-    while True:
-        try:
-            await asyncio.sleep(5)
-            # The CosmosDB SDK is synchronous, so we should run queries in thread
-            # but for a simple polling loop in the background, this is usually fast enough.
+async def background_worker_pool():
+    # Concurrency control: max 4 workers to protect Azure Open AI limits
+    concurrency_limit = 4
+    semaphore = asyncio.Semaphore(concurrency_limit)
+    
+    async def process_chunk_task(chunk_id: str):
+        async with semaphore:
             jobs_cont = await asyncio.to_thread(get_jobs_container)
-            pending_jobs = list(await asyncio.to_thread(
-                lambda: list(jobs_cont.query_items(
-                    "SELECT * FROM c WHERE c.status = 'pending'",
-                    enable_cross_partition_query=True
-                ))
-            ))
-            for job in pending_jobs:
-                job["status"] = "processing"
-                await asyncio.to_thread(jobs_cont.upsert_item, job)
+            try:
+                chunk_job = await asyncio.to_thread(jobs_cont.read_item, item=chunk_id, partition_key=chunk_id)
+                meeting_id = chunk_job.get("meeting_id")
                 
-                try:
-                    blob_name = job.get("blob_name")
-                    filename = job.get("filename", "audio.ogg")
-                    content_type = job.get("content_type", "audio/ogg")
+                # Check cancellation
+                meeting_job = await asyncio.to_thread(jobs_cont.read_item, item=meeting_id, partition_key=meeting_id)
+                if meeting_job.get("status") == "CANCELLED":
+                    return
+                
+                chunk_job["status"] = "PROCESSING"
+                await asyncio.to_thread(jobs_cont.upsert_item, chunk_job)
+                
+                # Increment processing_chunks safely
+                await update_meeting_stats_with_etag(meeting_id, processing_delta=1)
+                
+                # Process audio
+                blob_path = chunk_job.get("blob_path")
+                blob_container = await asyncio.to_thread(get_blob_container)
+                blob_client = blob_container.get_blob_client(blob_path)
+                
+                stream = await asyncio.to_thread(blob_client.download_blob)
+                audio_bytes = await asyncio.to_thread(stream.readall)
+                
+                segments = await asyncio.to_thread(
+                    _run_diarization,
+                    audio_bytes,
+                    "chunk.ogg",
+                    "audio/ogg"
+                )
+                
+                chunk_job["status"] = "COMPLETED"
+                chunk_job["segments"] = segments
+                await asyncio.to_thread(jobs_cont.upsert_item, chunk_job)
+                
+                # Decrement processing, increment completed
+                updated_meeting = await update_meeting_stats_with_etag(meeting_id, processing_delta=-1, completed_delta=1)
+                
+                if updated_meeting.get("_should_aggregate"):
+                    # Aggregate transcripts
+                    all_chunks = list(await asyncio.to_thread(
+                        lambda: list(jobs_cont.query_items(
+                            f"SELECT * FROM c WHERE c.type = 'chunk' AND c.meeting_id = '{meeting_id}'",
+                            enable_cross_partition_query=True
+                        ))
+                    ))
+                    all_chunks.sort(key=lambda x: x.get("chunk_index", 0))
                     
-                    if blob_name:
-                        blob_container = await asyncio.to_thread(get_blob_container)
-                        blob_client = blob_container.get_blob_client(blob_name)
-                        stream = await asyncio.to_thread(blob_client.download_blob)
-                        audio_bytes = await asyncio.to_thread(stream.readall)
-                        
-                        segments = await asyncio.to_thread(
-                            _run_diarization,
-                            audio_bytes,
-                            filename,
-                            content_type
-                        )
-                        job["segments"] = segments
-                        job["merged_transcript"] = segments
-                        job["status"] = "completed"
-                        
-                        # Notify via WebSocket
+                    final_segments = []
+                    for c in all_chunks:
+                        final_segments.extend(c.get("segments", []))
+                    
+                    updated_meeting["status"] = "COMPLETED"
+                    updated_meeting["merged_transcript"] = final_segments
+                    updated_meeting["segments"] = final_segments
+                    await asyncio.to_thread(jobs_cont.upsert_item, updated_meeting)
+                    
+                    # Cleanup blobs
+                    for c in all_chunks:
                         try:
-                            user_id = job.get("user_id")
-                            if user_id:
-                                await manager.send_personal_message({"type": "job_completed", "jobId": job.get("id")}, user_id)
-                        except Exception as ws_err:
-                            print(f"Failed to send WS notification: {ws_err}")
-                        
-                        try:
-                            await asyncio.to_thread(blob_client.delete_blob)
+                            bc = blob_container.get_blob_client(c.get("blob_path"))
+                            await asyncio.to_thread(bc.delete_blob)
                         except Exception:
                             pass
+                            
+            except Exception as e:
+                print(f"Worker Error on {chunk_id}: {e}")
+                
+                if chunk_job:
+                    meeting_id = chunk_job.get("meeting_id")
+                    retry_count = chunk_job.get("retry_count", 0)
+                    if retry_count < chunk_job.get("max_retry", 3):
+                        chunk_job["status"] = "RETRYING"
+                        chunk_job["retry_count"] = retry_count + 1
+                        await asyncio.to_thread(jobs_cont.upsert_item, chunk_job)
+                        # Decrement processing
+                        await update_meeting_stats_with_etag(meeting_id, processing_delta=-1)
+                        # Re-queue after delay
+                        asyncio.get_event_loop().call_later(5, lambda: chunk_queue.put_nowait(chunk_id))
                     else:
-                        job["status"] = "failed"
-                        job["error"] = "Blob name not found"
-                except Exception as e:
-                    job["status"] = "failed"
-                    job["error"] = str(e)
-                finally:
-                    await asyncio.to_thread(jobs_cont.upsert_item, job)
-        except Exception as e:
-            print(f"Worker loop error: {e}")
+                        chunk_job["status"] = "FAILED"
+                        chunk_job["error"] = str(e)
+                        await asyncio.to_thread(jobs_cont.upsert_item, chunk_job)
+                        # Decrement processing, increment failed
+                        await update_meeting_stats_with_etag(meeting_id, processing_delta=-1, failed_delta=1)
 
-@app.post("/diarize/background")
-async def diarize_background(
+    while True:
+        chunk_id = await chunk_queue.get()
+        asyncio.create_task(process_chunk_task(chunk_id))
+        chunk_queue.task_done()
+
+async def dcp_startup_recovery():
+    """Recover PENDING, QUEUED, PROCESSING chunks on startup."""
+    try:
+        jobs_cont = await asyncio.to_thread(get_jobs_container)
+        recoverable_chunks = list(await asyncio.to_thread(
+            lambda: list(jobs_cont.query_items(
+                "SELECT * FROM c WHERE c.type = 'chunk' AND c.status IN ('PENDING', 'QUEUED', 'PROCESSING', 'RETRYING')",
+                enable_cross_partition_query=True
+            ))
+        ))
+        for chunk in recoverable_chunks:
+            chunk_queue.put_nowait(chunk["id"])
+    except Exception as e:
+        print(f"Recovery failed: {e}")
+
+class InitJobRequest(BaseModel):
+    total_chunks: int
+    topic: str = "Meeting"
+
+@app.post("/jobs/init")
+async def init_meeting_job(req: InitJobRequest, user: dict = Depends(get_current_user)):
+    meeting_id = str(uuid.uuid4())
+    meeting_doc = {
+        "id": meeting_id,
+        "type": "meeting",
+        "status": "CREATED",
+        "user_id": user.get("sub"),
+        "total_chunks": req.total_chunks,
+        "completed_chunks": 0,
+        "uploaded_chunks": 0,
+        "processing_chunks": 0,
+        "failed_chunks": 0,
+        "topic": req.topic,
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    jobs_cont = get_jobs_container()
+    jobs_cont.create_item(meeting_doc)
+    return {"status": "success", "meeting_id": meeting_id}
+
+@app.post("/jobs/{meeting_id}/chunk")
+async def upload_chunk(
+    meeting_id: str,
+    chunk_index: int = Form(...),
     file: UploadFile = File(...),
     user: dict = Depends(get_current_user)
 ):
+    audio_bytes = await file.read()
+    if not audio_bytes:
+        raise HTTPException(status_code=400, detail="Empty audio upload.")
+        
+    chunk_id = str(uuid.uuid4())
+    blob_path = f"{user.get('sub')}/{meeting_id}/chunk_{chunk_index}.ogg"
+    
+    blob_container = get_blob_container()
+    blob_client = blob_container.get_blob_client(blob_path)
+    blob_client.upload_blob(audio_bytes, overwrite=True)
+    
+    chunk_doc = {
+        "id": chunk_id,
+        "type": "chunk",
+        "meeting_id": meeting_id,
+        "chunk_index": chunk_index,
+        "blob_path": blob_path,
+        "status": "QUEUED",
+        "retry_count": 0,
+        "max_retry": 3
+    }
+    jobs_cont = get_jobs_container()
+    jobs_cont.create_item(chunk_doc)
+    
+    # Increment uploaded_chunks safely
     try:
-        audio_bytes = await file.read()
-        if not audio_bytes:
-            raise HTTPException(status_code=400, detail="Empty audio upload.")
-            
-        job_id = str(uuid.uuid4())
-        blob_name = f"{job_id}_{file.filename or 'audio.ogg'}"
+        meeting_job = jobs_cont.read_item(item=meeting_id, partition_key=meeting_id)
+        if meeting_job.get("status") == "CREATED":
+            meeting_job["status"] = "UPLOADING"
+        meeting_job["uploaded_chunks"] = meeting_job.get("uploaded_chunks", 0) + 1
+        jobs_cont.upsert_item(meeting_job)
+    except Exception:
+        pass
         
-        blob_container = get_blob_container()
-        blob_client = blob_container.get_blob_client(blob_name)
-        blob_client.upload_blob(audio_bytes, overwrite=True)
+    chunk_queue.put_nowait(chunk_id)
+    return {"status": "success", "chunk_id": chunk_id}
 
-        job_doc = {
-            "id": job_id,
-            "status": "pending",
-            "blob_name": blob_name,
-            "filename": file.filename or "audio.ogg",
-            "content_type": file.content_type or "audio/ogg",
-            "user_id": user.get("sub"),
-            "created_at": datetime.now(timezone.utc).isoformat()
-        }
-        
-        jobs_cont = get_jobs_container()
-        jobs_cont.create_item(job_doc)
-        
-        return {"status": "success", "job_id": job_id}
-    except Exception as exc:
-        traceback.print_exc()
-        return {"status": "error", "message": str(exc)}
-
-@app.get("/jobs/{job_id}")
-async def get_job_status(job_id: str, user: dict = Depends(get_current_user)):
+@app.get("/jobs/{meeting_id}/progress")
+async def get_job_progress(meeting_id: str, user: dict = Depends(get_current_user)):
     try:
         jobs_cont = get_jobs_container()
-        job_list = list(jobs_cont.query_items(
-            "SELECT * FROM c WHERE c.id = @id",
-            parameters=[{"name": "@id", "value": job_id}],
-            enable_cross_partition_query=True
-        ))
-        if not job_list:
-            raise HTTPException(status_code=404, detail="Job not found")
+        meeting_job = jobs_cont.read_item(item=meeting_id, partition_key=meeting_id)
+        
+        status = meeting_job.get("status")
+        uploaded = meeting_job.get("uploaded_chunks", 0)
+        completed = meeting_job.get("completed_chunks", 0)
+        processing = meeting_job.get("processing_chunks", 0)
+        failed = meeting_job.get("failed_chunks", 0)
+        total = meeting_job.get("total_chunks", 1)
+        
+        # Simple progress estimate
+        upload_weight = 0.3
+        process_weight = 0.7
+        progress = int(((uploaded / total) * upload_weight * 100) + ((completed / total) * process_weight * 100))
+        if status == "COMPLETED":
+            progress = 100
             
-        job = job_list[0]
         return {
             "status": "success",
-            "job_status": job.get("status"),
-            "segments": job.get("segments", []),
-            "merged_transcript": job.get("merged_transcript", []),
-            "error": job.get("error")
+            "job_status": status,
+            "progress": progress,
+            "total_chunks": total,
+            "uploaded_chunks": uploaded,
+            "processing_chunks": processing,
+            "completed_chunks": completed,
+            "failed_chunks": failed,
+            "segments": meeting_job.get("segments", []),
+            "merged_transcript": meeting_job.get("merged_transcript", [])
         }
-    except HTTPException:
-        raise
     except Exception as exc:
         traceback.print_exc()
-        return {"status": "error", "message": str(exc)}
+        raise HTTPException(status_code=404, detail="Job not found")
 
 
 if __name__ == "__main__":

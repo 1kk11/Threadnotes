@@ -138,3 +138,67 @@ export async function transcribeAudioFile(
 
   return parts.filter(Boolean).join("\n\n");
 }
+
+export async function diarizeAudioFileBackground(
+  audioFilePath: string,
+  topic: string,
+  opts: Opts = {},
+): Promise<string> {
+  const electron =
+    typeof window !== "undefined" ? window.electronAPI : undefined;
+  if (!electron?.audioCompressAndRead) {
+    throw new Error("Audio processing is only available in the desktop app.");
+  }
+
+  // Use 1400 seconds to fit under the 25MB Azure chunk limit
+  const { chunks, mimeType } = await electron.audioCompressAndRead(
+    audioFilePath,
+    1400
+  );
+
+  const initRes = await fetch(`${API_URL}/jobs/init`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(opts.jwt ? { Authorization: `Bearer ${opts.jwt}` } : {}),
+    },
+    body: JSON.stringify({ total_chunks: chunks.length, topic }),
+    signal: opts.signal,
+  });
+  const initResult = await initRes.json();
+  if (!initRes.ok || initResult.status === "error") {
+    throw new Error(initResult.detail || initResult.message || "Init failed");
+  }
+
+  const meetingId = initResult.meeting_id;
+  
+  // Upload chunks in parallel, capped at 2 concurrency
+  const CONCURRENCY = 2;
+  let nextIndex = 0;
+  
+  const uploader = async () => {
+    while (true) {
+      const i = nextIndex++;
+      if (i >= chunks.length) break;
+      const { buffer, name } = chunks[i];
+      const form = new FormData();
+      form.append("chunk_index", i.toString());
+      form.append("file", new Blob([buffer], { type: mimeType }), name);
+
+      const res = await fetch(`${API_URL}/jobs/${meetingId}/chunk`, {
+        method: "POST",
+        headers: opts.jwt ? { Authorization: `Bearer ${opts.jwt}` } : undefined,
+        body: form,
+        signal: opts.signal,
+      });
+      const result = await res.json();
+      if (!res.ok || result.status === "error") {
+        throw new Error(result.detail || result.message || `Upload failed on chunk ${i}`);
+      }
+    }
+  }
+  
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, chunks.length) }, () => uploader()));
+  
+  return meetingId;
+}

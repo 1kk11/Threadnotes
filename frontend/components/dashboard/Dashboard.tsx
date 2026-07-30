@@ -19,7 +19,7 @@ import CaptureControls from "./CaptureControls";
 import TranscriptArea from "./TranscriptArea";
 import { loadMeetings, addMeeting, updateMeeting, MEETINGS_EVENT } from "@/lib/meetingStore";
 import { getUserName, clearSession } from "@/lib/auth";
-import { diarizeAudioFile, transcribeAudioFile } from "@/lib/diarize";
+import { diarizeAudioFile, transcribeAudioFile, diarizeAudioFileBackground } from "@/lib/diarize";
 import ConfirmModal from "@/components/ui/ConfirmModal";
 import ScrollNav from "@/components/ui/ScrollNav";
 import AudioPlayer from "@/components/ui/AudioPlayer";
@@ -632,6 +632,57 @@ export default function Dashboard() {
     handleDiarizeProgress,
     saveTranscriptLocally,
   ]);
+
+  // File just selected — reset state and wait for the user to click Upload.
+  const handleDiarizeBackground = useCallback(async () => {
+    if (!audioFilePath || isDiarizing || mergedTranscript.length > 0) {
+      return;
+    }
+    const sid = sessionIdRef.current;
+    
+    setIsDiarizing(true);
+    setDiarizeProgress(2);
+    setStatusMessage("Starting background job...");
+    
+    try {
+      const topicName = lines.length > 0 ? lines[0].split(" ").slice(0, 5).join(" ") : "Meeting";
+      const meetingId = await diarizeAudioFileBackground(audioFilePath, topicName, {
+        jwt: localStorage.getItem("token"),
+        signal: uploadAbortRef.current?.signal,
+      });
+      
+      if (sid !== sessionIdRef.current) return;
+      
+      // Save meeting explicitly with the meeting ID returned by init
+      const record = {
+        id: meetingId,
+        topic: topicName,
+        date: new Date().toISOString(),
+        transcript: [],
+        filePath: undefined,
+        durationSec: sessionTime,
+        plainText: "",
+        diarized: undefined,
+        audioPath: audioFilePath || undefined,
+        audioMediaUrl: uploadedMediaUrl || undefined,
+      };
+      
+      addMeeting(record);
+      
+      setStatusMessage("Job started! You can check progress in My Meetings.");
+      setIsSaved(true);
+      setSavedMeetingId(meetingId);
+      
+    } catch (e: any) {
+      if (sid !== sessionIdRef.current) return;
+      setStatusMessage("⚠️ Failed to start background job");
+    } finally {
+      if (sid === sessionIdRef.current) {
+        setIsDiarizing(false);
+        setDiarizeProgress(0);
+      }
+    }
+  }, [audioFilePath, isDiarizing, mergedTranscript.length, lines, sessionTime, uploadedMediaUrl]);
 
   // File just selected — reset state and wait for the user to click Upload.
   const handleSelectUploadFile = useCallback((file: File) => {
@@ -1325,6 +1376,13 @@ export default function Dashboard() {
                                 className="shrink-0 rounded-lg bg-linear-to-r from-[#2FB5AA] to-[#2E6DBE] px-4 py-1.5 text-xs font-semibold text-white shadow-sm transition-all hover:from-[#28a29a] hover:to-[#2a61a8] disabled:cursor-not-allowed disabled:opacity-60"
                               >
                                 {isDiarizing ? "Diarizing…" : "Diarize"}
+                              </button>
+                              <button
+                                onClick={handleDiarizeBackground}
+                                disabled={isDiarizing || !audioFilePath}
+                                className="shrink-0 rounded-lg border border-[#2E6DBE] text-[#2E6DBE] px-4 py-1.5 text-xs font-semibold shadow-sm transition-all hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                Diarize in Background
                               </button>
                             </div>
                           ) : transcriptText ? (
