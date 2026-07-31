@@ -336,7 +336,8 @@ export default function MyMeetings() {
             
             updateMeeting(m.id, {
                diarized: updatedRows,
-               plainText: plainText
+               plainText: plainText,
+               status: 'COMPLETED'
             });
             loadLocalMeetings();
           } else {
