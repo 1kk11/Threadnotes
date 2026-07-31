@@ -138,14 +138,13 @@ def get_jobs_container():
             _jobs_cont = database.get_container_client(JOBS_CONTAINER)
     return _jobs_cont
 
-async def update_meeting_stats_with_etag(meeting_id: str, processing_delta: int = 0, completed_delta: int = 0, failed_delta: int = 0):
-    """Optimistically update chunk stats and check if all chunks are done."""
+async def update_meeting_stats_with_etag(meeting_id: str, processing_delta=0, completed_delta=0, failed_delta=0, error_msg: str = None):
     jobs_cont = await asyncio.to_thread(get_jobs_container)
     from azure.core import MatchConditions
     import azure.core.exceptions
+    max_retries = 3
     
-    max_retries = 5
-    for _ in range(max_retries):
+    for attempt in range(max_retries):
         try:
             meeting_job = await asyncio.to_thread(jobs_cont.read_item, item=meeting_id, partition_key=meeting_id)
             if meeting_job.get("status") in ["COMPLETED", "CANCELLED"]:
@@ -156,9 +155,15 @@ async def update_meeting_stats_with_etag(meeting_id: str, processing_delta: int 
             meeting_job["failed_chunks"] = max(0, meeting_job.get("failed_chunks", 0) + failed_delta)
             
             should_aggregate = False
-            if meeting_job["completed_chunks"] == meeting_job.get("total_chunks", 0) and meeting_job.get("total_chunks", 0) > 0:
-                meeting_job["status"] = "MERGING"
-                should_aggregate = True
+            if (meeting_job["completed_chunks"] + meeting_job["failed_chunks"]) == meeting_job.get("total_chunks", 0) and meeting_job.get("total_chunks", 0) > 0:
+                if meeting_job["failed_chunks"] > 0:
+                    meeting_job["status"] = "FAILED"
+                    should_aggregate = False
+                    if error_msg:
+                        meeting_job["error"] = error_msg
+                else:
+                    meeting_job["status"] = "MERGING"
+                    should_aggregate = True
                 
             updated_job = await asyncio.to_thread(
                 jobs_cont.replace_item,
@@ -1178,7 +1183,7 @@ async def background_worker_pool():
                         chunk_job["error"] = str(e)
                         await asyncio.to_thread(jobs_cont.upsert_item, chunk_job)
                         # Decrement processing, increment failed
-                        await update_meeting_stats_with_etag(meeting_id, processing_delta=-1, failed_delta=1)
+                        await update_meeting_stats_with_etag(meeting_id, processing_delta=-1, failed_delta=1, error_msg=str(e))
 
     while True:
         chunk_id = await chunk_queue.get()
@@ -1298,7 +1303,8 @@ async def get_job_progress(meeting_id: str, user: dict = Depends(get_current_use
             "completed_chunks": completed,
             "failed_chunks": failed,
             "segments": meeting_job.get("segments", []),
-            "merged_transcript": meeting_job.get("merged_transcript", [])
+            "merged_transcript": meeting_job.get("merged_transcript", []),
+            "error": meeting_job.get("error", None)
         }
     except Exception as exc:
         traceback.print_exc()

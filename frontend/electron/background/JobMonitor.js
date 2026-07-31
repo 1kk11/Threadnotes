@@ -257,9 +257,9 @@ class JobMonitor {
             if (fetchedStatus === 'COMPLETED') {
                 this.handleJobCompleted(meetingId, data);
             } else if (fetchedStatus === 'FAILED') {
-                this.addTimelineEvent(meetingId, "JOB_FAILED");
-                console.error(`[JobMonitor][${meetingId}] Backend reported FAILED status`);
-                this.unregisterJob(meetingId);
+                this.addTimelineEvent(meetingId, "JOB_FAILED", { error: data.error });
+                console.error(`[JobMonitor][${meetingId}] Backend reported FAILED status: ${data.error || 'Unknown error'}`);
+                this.handleJobFailed(meetingId, data);
             } else {
                 this.schedulePoll(meetingId);
             }
@@ -297,6 +297,29 @@ class JobMonitor {
             if (this.onJobCompleted) {
                 this.onJobCompleted(meetingId);
             }
+        });
+
+        notification.show();
+        this.unregisterJob(meetingId);
+    }
+
+    async handleJobFailed(meetingId, data) {
+        const jobData = this.activeJobs.get(meetingId);
+        const topic = jobData ? jobData.topic : (data.topic || 'Meeting');
+        const errorMessage = data.error || 'Unknown error occurred in processing';
+
+        this.addTimelineEvent(meetingId, "NOTIFICATION_SHOWN", { type: "error" });
+        console.log(`[JobMonitor][${meetingId}] Showing failed notification`);
+
+        const notification = new Notification({
+            title: '❌ Processing Failed',
+            body: `${topic}\nError: ${errorMessage}`,
+            icon: this.iconPath
+        });
+
+        await this.updateLocalMeeting(meetingId, {
+            status: 'FAILED',
+            error: errorMessage
         });
 
         notification.show();

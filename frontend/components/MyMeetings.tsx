@@ -33,6 +33,8 @@ type Meeting = {
   highlights?: string[];
   highlightsShown?: boolean;
   jobId?: string;
+  status?: string;
+  error?: string;
 };
 
 type DiarizedRow = {
@@ -315,18 +317,24 @@ export default function MyMeetings() {
     const pendingMeetings = meetings.filter(
       (m) => (!m.transcript || m.transcript.length === 0) && !m.plainText && !m.diarized
     );
-    
-    if (pendingMeetings.length === 0) return;
-
     const fetchProgress = async () => {
       const token = localStorage.getItem("token");
-      for (const m of pendingMeetings) {
+      for (const m of meetings.filter(m => m.status !== 'COMPLETED' && m.status !== 'FAILED')) {
         try {
           const res = await fetch(`${API_URL}/jobs/${m.id}/progress`, {
-            headers: token ? { Authorization: `Bearer ${token}` } : {},
+            headers: { "Authorization": `Bearer ${token}` }
           });
           if (!res.ok) continue;
           const data = await res.json();
+          
+          if (data.job_status === "FAILED") {
+            updateMeeting(m.id, {
+               status: 'FAILED',
+               error: data.error || 'Processing failed'
+            });
+            loadLocalMeetings();
+            continue;
+          }
           
           if (data.job_status === "COMPLETED" && (data.merged_transcript || data.segments)) {
             const updatedRows = Array.isArray(data.merged_transcript) && data.merged_transcript.length > 0 
@@ -341,8 +349,7 @@ export default function MyMeetings() {
             });
             loadLocalMeetings();
           } else {
-             const t = data.total_chunks > 0 ? data.total_chunks : 1;
-             const pct = data.job_status === "PENDING" ? 0 : Math.round((data.completed_chunks / t) * 100);
+             const pct = data.progress !== undefined ? data.progress : (data.job_status === "PENDING" ? 0 : Math.round((data.completed_chunks / (data.total_chunks || 1)) * 100));
              setJobProgress(prev => ({
                ...prev,
                [m.id]: { 
@@ -791,8 +798,8 @@ export default function MyMeetings() {
                     <div className="flex items-center gap-2 w-full md:w-auto shrink-0 flex-wrap sm:flex-nowrap">
                       {((!meeting.transcript || meeting.transcript.length === 0) && !meeting.plainText && !meeting.diarized) ? (
                         <div className="flex-1 sm:flex-none flex flex-col gap-1.5 min-w-[150px]">
-                           {jobProgress[meeting.id]?.status === "error" ? (
-                             <span className="text-xs font-bold text-red-500">Processing Failed</span>
+                           {jobProgress[meeting.id]?.status === "error" || meeting.status === 'FAILED' ? (
+                             <span className="text-xs font-bold text-red-500">Processing Failed{meeting.error ? `: ${meeting.error}` : ""}</span>
                            ) : (
                              <>
                                <div className="flex items-center gap-2">

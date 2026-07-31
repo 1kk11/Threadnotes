@@ -22,6 +22,8 @@ export type StoredMeeting = {
   highlights?: string[];
   highlightsShown?: boolean;
   jobId?: string;
+  status?: string;
+  error?: string;
 };
 
 function currentUserId(): string {
