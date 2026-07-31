@@ -367,10 +367,10 @@ export default function MyMeetings() {
         }
       }
     };
-
     fetchProgress();
+    const interval = setInterval(fetchProgress, 5000);
+    return () => clearInterval(interval);
   }, [meetings]);
-
 
 
   const processedMeetings = useMemo(() => {
