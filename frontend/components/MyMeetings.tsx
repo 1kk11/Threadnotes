@@ -805,15 +805,13 @@ export default function MyMeetings() {
                                    {jobProgress[meeting.id]?.pct || 0}%
                                  </span>
                                </div>
-                               {(jobProgress[meeting.id]?.total ?? 0) > 0 && (
                                  <div className="flex items-center justify-between text-[10px] font-medium text-slate-400">
-                                   <span title="Completed chunks">{jobProgress[meeting.id]?.completed || 0} done</span>
+                                   <span title="Completed chunks">{jobProgress[meeting.id]?.completed || 0} / {jobProgress[meeting.id]?.total || 0} done</span>
                                    <span title="Processing chunks">{jobProgress[meeting.id]?.processing || 0} proc</span>
                                    {(jobProgress[meeting.id]?.failed ?? 0) > 0 && (
                                      <span className="text-red-400" title="Failed chunks">{jobProgress[meeting.id]?.failed} failed</span>
                                    )}
                                  </div>
-                               )}
                              </>
                            )}
                         </div>

@@ -20,10 +20,8 @@ const fs = require("fs");
 const crypto = require("crypto");
 const { pathToFileURL } = require("url");
 
-const Store = require('electron-store');
-const JobMonitor = require('./background/JobMonitor');
-
-const store = new Store();
+let Store;
+let store;
 let jobMonitor;
 
 const isDev = !app.isPackaged;
@@ -564,6 +562,9 @@ if (!gotTheLock) {
         console.log("[ThreadNotes] Recordings  :", getRecordingsDirectory());
         console.log("[ThreadNotes] Transcripts :", getLocalTranscriptsDirectory());
 
+        Store = (await import('electron-store')).default;
+        store = new Store();
+        const JobMonitor = require('./background/JobMonitor');
         jobMonitor = new JobMonitor(store);
         jobMonitor.onJobCompleted = (meetingId) => {
             if (mainWindow && !mainWindow.isDestroyed()) {
@@ -1015,7 +1016,7 @@ ipcMain.handle("remux-audio", async (event, filePath, totalDurationSec) => {
     };
 });
 
-const SEGMENT_SECONDS = 1400;
+const SEGMENT_SECONDS = 1200;
 
 ipcMain.handle("audio-compress-and-read", async (_event, filePath, segmentSeconds) => {
     if (!filePath || !fs.existsSync(filePath)) {

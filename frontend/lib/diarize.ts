@@ -150,10 +150,10 @@ export async function diarizeAudioFileBackground(
     throw new Error("Audio processing is only available in the desktop app.");
   }
 
-  // Use 1400 seconds to fit under the 25MB Azure chunk limit
+  // Use 1200 seconds to fit under the 25MB Azure chunk limit and match expected 20-min intervals
   const { chunks, mimeType } = await electron.audioCompressAndRead(
     audioFilePath,
-    1400
+    1200
   );
 
   const initRes = await fetch(`${API_URL}/jobs/init`, {
