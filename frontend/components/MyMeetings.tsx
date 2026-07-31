@@ -311,7 +311,6 @@ export default function MyMeetings() {
     };
   }, [selectedMeeting, isCalendarOpen]);
 
-  // Poll for background job progress
   useEffect(() => {
     const pendingMeetings = meetings.filter(
       (m) => (!m.transcript || m.transcript.length === 0) && !m.plainText && !m.diarized
@@ -319,7 +318,7 @@ export default function MyMeetings() {
     
     if (pendingMeetings.length === 0) return;
 
-    const interval = setInterval(async () => {
+    const fetchProgress = async () => {
       const token = localStorage.getItem("token");
       for (const m of pendingMeetings) {
         try {
@@ -356,12 +355,12 @@ export default function MyMeetings() {
              }));
           }
         } catch (e) {
-          console.error("Poll error", e);
+          console.error("Fetch progress error", e);
         }
       }
-    }, 5000);
+    };
 
-    return () => clearInterval(interval);
+    fetchProgress();
   }, [meetings]);
 
 

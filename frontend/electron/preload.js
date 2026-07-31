@@ -61,5 +61,14 @@ contextBridge.exposeInMainWorld("electronAPI", {
         const listener = (_e, pct) => callback(pct);
         ipcRenderer.on("save-progress", listener);
         return () => ipcRenderer.removeListener("save-progress", listener);
+    },
+    registerJob: (meetingId, topic) => ipcRenderer.send("job-register", { meetingId, topic }),
+    unregisterJob: (meetingId) => ipcRenderer.send("job-unregister", meetingId),
+    getActiveJobs: () => ipcRenderer.invoke("job-get-active"),
+    setAuthToken: (token) => ipcRenderer.send("auth-set-token", token),
+    onNavigate: (callback) => {
+        const listener = (_e, route) => callback(route);
+        ipcRenderer.on("navigate-to-route", listener);
+        return () => ipcRenderer.removeListener("navigate-to-route", listener);
     }
 });

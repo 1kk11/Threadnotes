@@ -35,4 +35,7 @@ export function clearSession(): void {
   if (typeof window === "undefined") return;
   localStorage.removeItem("token");
   localStorage.removeItem("userName");
+  if ((window as any).electronAPI) {
+    (window as any).electronAPI.setAuthToken(null);
+  }
 }

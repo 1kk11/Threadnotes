@@ -5,6 +5,7 @@ import AuthInterceptor from "@/components/AuthInterceptor";
 import WindowControls from "@/components/WindowControls";
 import { GlobalAudioProvider } from "@/components/GlobalAudioProvider";
 import { GlobalRecordingProvider } from "@/components/GlobalRecordingProvider";
+import NavigationListener from "@/components/NavigationListener";
 const sora = Sora({
   subsets: ["latin"],
   weight: ["300", "400", "500", "600", "700"],
@@ -39,6 +40,7 @@ export default function RootLayout({
                 <WindowControls />
               </div>
               <div className="relative min-h-0 w-full flex-1 overflow-hidden">
+                <NavigationListener />
                 <AuthInterceptor />
                 {children}
               </div>
