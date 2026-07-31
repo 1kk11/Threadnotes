@@ -167,9 +167,6 @@ export default function AuthPage() {
         if (!res.ok) throw new Error(data.detail || "Authentication failed");
 
         localStorage.setItem("token", data.access_token);
-        if (typeof window !== 'undefined' && (window as any).electronAPI) {
-          (window as any).electronAPI.setAuthToken(data.access_token);
-        }
         if (data.name) localStorage.setItem("userName", data.name);
         router.push("/");
       }

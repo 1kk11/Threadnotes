@@ -668,9 +668,6 @@ export default function Dashboard() {
       };
       
       addMeeting(record);
-      if (typeof window !== 'undefined' && (window as any).electronAPI) {
-        (window as any).electronAPI.registerJob(meetingId, topicName);
-      }
       
       setStatusMessage("Job started! You can check progress in My Meetings.");
       setIsSaved(true);

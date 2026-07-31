@@ -11,20 +11,13 @@ const {
     screen,
     Tray,
     nativeImage,
-    Notification,
-    powerMonitor
+    Notification
 } = require("electron");
 const { spawn } = require("child_process");
 const path = require("path");
 const fs = require("fs");
 const crypto = require("crypto");
 const { pathToFileURL } = require("url");
-
-const Store = require('electron-store');
-const JobMonitor = require('./background/JobMonitor');
-
-const store = new Store();
-let jobMonitor;
 
 const isDev = !app.isPackaged;
 
@@ -124,7 +117,7 @@ function runFfmpeg(args, onProgress, knownDurationSec) {
                     const pct = Math.min(99, Math.round((t / durationSec) * 100));
                     try {
                         onProgress(pct);
-                    } catch { }
+                    } catch {}
                 }
             }
         });
@@ -224,10 +217,10 @@ function handleAppProtocol(request) {
 
     return net.fetch(fileUrl).then(
         (res) =>
-            new Response(res.body, {
-                status: res.status,
-                headers: { "Content-Type": mime },
-            }),
+        new Response(res.body, {
+            status: res.status,
+            headers: { "Content-Type": mime },
+        }),
     );
 }
 
@@ -423,32 +416,15 @@ ipcMain.on("show-notification", (_event, { title, body }) => {
         body,
         icon: path.join(__dirname, "..", "build", "icon.ico")
     });
-
+    
     notification.on('click', () => {
         if (mainWindow && !mainWindow.isDestroyed()) {
             mainWindow.show();
             mainWindow.focus();
         }
     });
-
+    
     notification.show();
-});
-
-ipcMain.on("job-register", (_event, { meetingId, topic }) => {
-    if (jobMonitor) jobMonitor.registerJob(meetingId, topic);
-});
-
-ipcMain.on("job-unregister", (_event, meetingId) => {
-    if (jobMonitor) jobMonitor.unregisterJob(meetingId);
-});
-
-ipcMain.handle("job-get-active", () => {
-    if (jobMonitor) return jobMonitor.getActiveJobs();
-    return [];
-});
-
-ipcMain.on("auth-set-token", (_event, token) => {
-    store.set('jwt_token', token);
 });
 
 function createWindow() {
@@ -559,110 +535,93 @@ if (!gotTheLock) {
     });
 
     app.whenReady().then(async () => {
-        // Print exactly where user data is stored, so it's never a mystery.
-        console.log("[ThreadNotes] Data folder :", app.getPath("userData"));
-        console.log("[ThreadNotes] Recordings  :", getRecordingsDirectory());
-        console.log("[ThreadNotes] Transcripts :", getLocalTranscriptsDirectory());
+    // Print exactly where user data is stored, so it's never a mystery.
+    console.log("[ThreadNotes] Data folder :", app.getPath("userData"));
+    console.log("[ThreadNotes] Recordings  :", getRecordingsDirectory());
+    console.log("[ThreadNotes] Transcripts :", getLocalTranscriptsDirectory());
 
-        jobMonitor = new JobMonitor(store);
-        jobMonitor.onJobCompleted = (meetingId) => {
-            if (mainWindow && !mainWindow.isDestroyed()) {
-                mainWindow.webContents.send("navigate-to-route", `/meetings/${meetingId}`);
-                if (!mainWindow.isVisible()) mainWindow.show();
-                mainWindow.focus();
-            }
-        };
+    protocol.handle(APP_SCHEME, handleAppProtocol);
+    protocol.handle(MEDIA_SCHEME, handleMediaProtocol);
 
-        powerMonitor.on('suspend', () => {
-            if (jobMonitor) jobMonitor.pauseAll();
-        });
+    session.defaultSession.setPermissionRequestHandler(
+        (_wc, permission, callback) => {
+            callback(permission === "media");
+        },
+    );
+    session.defaultSession.setPermissionCheckHandler(
+        (_wc, permission) => permission === "media",
+    );
 
-        powerMonitor.on('resume', () => {
-            if (jobMonitor) jobMonitor.resumeAll();
-        });
-
-        protocol.handle(APP_SCHEME, handleAppProtocol);
-        protocol.handle(MEDIA_SCHEME, handleMediaProtocol);
-
-        session.defaultSession.setPermissionRequestHandler(
-            (_wc, permission, callback) => {
-                callback(permission === "media");
-            },
-        );
-        session.defaultSession.setPermissionCheckHandler(
-            (_wc, permission) => permission === "media",
-        );
-
+    try {
+        const buildId = getBuildId();
+        const markerPath = path.join(app.getPath("userData"), "build-id.txt");
+        let prev = null;
         try {
-            const buildId = getBuildId();
-            const markerPath = path.join(app.getPath("userData"), "build-id.txt");
-            let prev = null;
+            prev = fs.readFileSync(markerPath, "utf-8").trim();
+        } catch {}
+        if (prev !== buildId) {
+            await session.defaultSession.clearCache();
             try {
-                prev = fs.readFileSync(markerPath, "utf-8").trim();
-            } catch { }
-            if (prev !== buildId) {
-                await session.defaultSession.clearCache();
-                try {
-                    fs.writeFileSync(markerPath, buildId, "utf-8");
-                } catch { }
-            }
-        } catch (err) {
-            console.warn("[build-id] cache-bust check failed:", err);
+                fs.writeFileSync(markerPath, buildId, "utf-8");
+            } catch {}
         }
+    } catch (err) {
+        console.warn("[build-id] cache-bust check failed:", err);
+    }
 
-        // Setup System Tray
-        const iconPath = path.join(__dirname, "..", "build", "icon.ico");
-        const trayIcon = nativeImage.createFromPath(iconPath);
-        const tray = new Tray(trayIcon);
-
-        const contextMenu = Menu.buildFromTemplate([
-            {
-                label: 'Open ThreadNotes',
-                click: () => {
-                    if (mainWindow && !mainWindow.isDestroyed()) {
-                        mainWindow.show();
-                        mainWindow.focus();
-                    } else {
-                        createWindow();
-                    }
-                }
-            },
-            { type: 'separator' },
-            {
-                label: 'Quit ThreadNotes',
-                click: () => {
-                    if (mainWindow && !mainWindow.isDestroyed()) {
-                        mainWindow.__allowClose = true;
-                        // Send close requested so dashboard checks unsaved changes
-                        mainWindow.webContents.send("app-close-requested");
-                    } else {
-                        app.quit();
-                    }
-                }
-            }
-        ]);
-
-        tray.setToolTip('ThreadNotes');
-        tray.setContextMenu(contextMenu);
-
-        tray.on('click', () => {
-            if (mainWindow && !mainWindow.isDestroyed()) {
-                if (mainWindow.isVisible()) {
+    // Setup System Tray
+    const iconPath = path.join(__dirname, "..", "build", "icon.ico");
+    const trayIcon = nativeImage.createFromPath(iconPath);
+    const tray = new Tray(trayIcon);
+    
+    const contextMenu = Menu.buildFromTemplate([
+        {
+            label: 'Open ThreadNotes',
+            click: () => {
+                if (mainWindow && !mainWindow.isDestroyed()) {
+                    mainWindow.show();
                     mainWindow.focus();
                 } else {
-                    mainWindow.show();
+                    createWindow();
                 }
-            } else {
-                createWindow();
             }
-        });
-
-        createWindow();
-
-        app.on("activate", () => {
-            if (BrowserWindow.getAllWindows().length === 0) createWindow();
-        });
+        },
+        { type: 'separator' },
+        {
+            label: 'Quit ThreadNotes',
+            click: () => {
+                if (mainWindow && !mainWindow.isDestroyed()) {
+                    mainWindow.__allowClose = true;
+                    // Send close requested so dashboard checks unsaved changes
+                    mainWindow.webContents.send("app-close-requested");
+                } else {
+                    app.quit();
+                }
+            }
+        }
+    ]);
+    
+    tray.setToolTip('ThreadNotes');
+    tray.setContextMenu(contextMenu);
+    
+    tray.on('click', () => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            if (mainWindow.isVisible()) {
+                mainWindow.focus();
+            } else {
+                mainWindow.show();
+            }
+        } else {
+            createWindow();
+        }
     });
+
+    createWindow();
+
+    app.on("activate", () => {
+        if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    });
+});
 }
 
 app.on("window-all-closed", () => {
@@ -670,7 +629,7 @@ app.on("window-all-closed", () => {
     if (process.platform !== "darwin") app.quit();
 });
 
-ipcMain.handle("save-transcript", async (_event, { content, defaultName }) => {
+ipcMain.handle("save-transcript", async(_event, { content, defaultName }) => {
     const win = BrowserWindow.getFocusedWindow();
     const { canceled, filePath } = await dialog.showSaveDialog(win, {
         title: "Save Transcript",
@@ -687,7 +646,7 @@ ipcMain.handle("save-transcript", async (_event, { content, defaultName }) => {
     return { saved: true, filePath };
 });
 
-ipcMain.handle("save-audio", async (_event, { src, defaultName } = {}) => {
+ipcMain.handle("save-audio", async(_event, { src, defaultName } = {}) => {
     if (!src || typeof src !== "string") return { saved: false, reason: "no-src" };
 
     let sourcePath = null;
@@ -782,7 +741,7 @@ function buildExportHtml(view, plainText, rows, title) {
     );
 }
 
-ipcMain.handle("export-transcript", async (_event, payload = {}) => {
+ipcMain.handle("export-transcript", async(_event, payload = {}) => {
     const { plainText, diarized, view, title, defaultName } = payload;
     const rows = Array.isArray(diarized) ? diarized : [];
     const win = BrowserWindow.getFocusedWindow();
@@ -814,7 +773,7 @@ ipcMain.handle("export-transcript", async (_event, payload = {}) => {
                 await fs.promises.writeFile(filePath, pdf);
             } finally {
                 pdfWin.destroy();
-                fs.promises.unlink(tmp).catch(() => { });
+                fs.promises.unlink(tmp).catch(() => {});
             }
         } else if (ext === ".csv") {
             await fs.promises.writeFile(filePath, "﻿" + buildExportCsv(view, plainText, rows), "utf-8");
@@ -829,7 +788,7 @@ ipcMain.handle("export-transcript", async (_event, payload = {}) => {
     }
 });
 
-ipcMain.handle("rename-transcript-file", async (_event, { oldPath, newBaseName } = {}) => {
+ipcMain.handle("rename-transcript-file", async(_event, { oldPath, newBaseName } = {}) => {
     if (!oldPath || !newBaseName) return { renamed: false };
 
     const dir = path.dirname(oldPath);
@@ -859,7 +818,7 @@ function getLocalTranscriptsDirectory() {
     return dir;
 }
 
-ipcMain.handle("save-transcript-local", async (_event, payload = {}) => {
+ipcMain.handle("save-transcript-local", async(_event, payload = {}) => {
     const dir = getLocalTranscriptsDirectory();
 
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
@@ -882,7 +841,7 @@ ipcMain.handle("save-transcript-local", async (_event, payload = {}) => {
 
 const audioBytesWritten = new Map();
 
-ipcMain.handle("audio-file-create", async () => {
+ipcMain.handle("audio-file-create", async() => {
     const filePath = createRecordingFilePath();
     const writeStream = fs.createWriteStream(filePath, { flags: "a" });
     audioWriteStreams.set(filePath, writeStream);
@@ -891,7 +850,7 @@ ipcMain.handle("audio-file-create", async () => {
     return filePath;
 });
 
-ipcMain.handle("audio-file-append", async (_event, filePath, chunk) => {
+ipcMain.handle("audio-file-append", async(_event, filePath, chunk) => {
     const writeStream = audioWriteStreams.get(filePath);
     if (!writeStream) {
         console.warn("[Recorder/main] audio-file-append: NO active stream for", filePath);
@@ -915,7 +874,7 @@ ipcMain.handle("audio-file-append", async (_event, filePath, chunk) => {
     });
 });
 
-ipcMain.handle("audio-file-close", async (_event, filePath) => {
+ipcMain.handle("audio-file-close", async(_event, filePath) => {
     const writeStream = audioWriteStreams.get(filePath);
     if (!writeStream) {
         console.warn("[Recorder/main] audio-file-close: no stream for", filePath);
@@ -932,7 +891,8 @@ ipcMain.handle("audio-file-close", async (_event, filePath) => {
                 console.warn("[Recorder/main] stat failed after close:", e);
             }
             console.log(
-                `[Recorder/main] audio-file-close → ${filePath} | bytes appended: ${audioBytesWritten.get(filePath) || 0
+                `[Recorder/main] audio-file-close → ${filePath} | bytes appended: ${
+                    audioBytesWritten.get(filePath) || 0
                 } | size on disk: ${sizeOnDisk}`,
             );
             audioBytesWritten.delete(filePath);
@@ -950,7 +910,7 @@ ipcMain.handle("audio-file-close", async (_event, filePath) => {
 // Persist an UPLOADED file's audio into the recordings dir as a small ogg and
 // return a durable media:// URL (so the audio plays in MyMeetings later).
 // Unlike remux-audio (live webm only) this auto-detects the input format.
-ipcMain.handle("persist-upload-audio", async (event, filePath) => {
+ipcMain.handle("persist-upload-audio", async(event, filePath) => {
     if (!filePath || !fs.existsSync(filePath)) {
         throw new Error(`Upload file not found: ${filePath}`);
     }
@@ -967,7 +927,7 @@ ipcMain.handle("persist-upload-audio", async (event, filePath) => {
         (pct) => {
             try {
                 event.sender.send("upload-progress", pct);
-            } catch { }
+            } catch {}
         },
     );
     return {
@@ -977,7 +937,7 @@ ipcMain.handle("persist-upload-audio", async (event, filePath) => {
     };
 });
 
-ipcMain.handle("remux-audio", async (event, filePath, totalDurationSec) => {
+ipcMain.handle("remux-audio", async(event, filePath, totalDurationSec) => {
     if (!filePath || !fs.existsSync(filePath)) {
         throw new Error(`Recording file not found for remux: ${filePath}`);
     }
@@ -998,7 +958,7 @@ ipcMain.handle("remux-audio", async (event, filePath, totalDurationSec) => {
         (pct) => {
             try {
                 event.sender.send("save-progress", pct);
-            } catch { }
+            } catch {}
         },
         totalDurationSec,
     );
@@ -1017,7 +977,7 @@ ipcMain.handle("remux-audio", async (event, filePath, totalDurationSec) => {
 
 const SEGMENT_SECONDS = 1400;
 
-ipcMain.handle("audio-compress-and-read", async (_event, filePath, segmentSeconds) => {
+ipcMain.handle("audio-compress-and-read", async(_event, filePath, segmentSeconds) => {
     if (!filePath || !fs.existsSync(filePath)) {
         throw new Error(`Recording file not found: ${filePath}`);
     }
@@ -1085,7 +1045,7 @@ ipcMain.handle("audio-compress-and-read", async (_event, filePath, segmentSecond
                 name: f,
             });
         }
-        fs.promises.unlink(full).catch(() => { });
+        fs.promises.unlink(full).catch(() => {});
     }
 
     if (chunks.length === 0) {
@@ -1096,7 +1056,7 @@ ipcMain.handle("audio-compress-and-read", async (_event, filePath, segmentSecond
     return { chunks, segmentSeconds: seg, mimeType: "audio/ogg" };
 });
 
-ipcMain.handle("get-desktop-source-id", async () => {
+ipcMain.handle("get-desktop-source-id", async() => {
     const sources = await desktopCapturer.getSources({ types: ["screen"] });
     return sources[0].id;
 });
