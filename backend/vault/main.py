@@ -60,10 +60,12 @@ app.add_middleware(
 logging.basicConfig(level=logging.INFO)
 _env_log = logging.getLogger("threadnotes.env")
 
-chunk_queue = asyncio.Queue()
+chunk_queue = None
 
 @app.on_event("startup")
-def _diagnose_env():
+async def _diagnose_env():
+    global chunk_queue
+    chunk_queue = asyncio.Queue()
     """Log presence + length of critical env vars and the presence/size of the
     Gmail secret files at startup. Never logs the actual secret values or file
     contents — only whether they're set/exist and how large they are."""
