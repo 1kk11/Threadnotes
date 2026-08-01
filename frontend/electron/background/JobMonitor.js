@@ -66,7 +66,7 @@ class JobMonitor {
             }
             
             this.activeJobs.set(meetingId, jobData);
-            this.schedulePoll(meetingId); // schedule initial poll on load
+            this.schedulePoll(meetingId, 1000 + Math.random() * 2000); // schedule initial poll on load quickly
         }
     }
 
