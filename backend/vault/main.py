@@ -62,6 +62,23 @@ _env_log = logging.getLogger("threadnotes.env")
 
 chunk_queue = None
 
+async def keep_alive_task():
+    """Smart Keep-Alive: Ping this server every 5 minutes ONLY IF there are tasks waiting in the chunk_queue."""
+    ping_url = os.getenv("RENDER_EXTERNAL_URL", "http://localhost:8000")
+    if ping_url.endswith("/"):
+        ping_url = ping_url[:-1]
+    health_endpoint = f"{ping_url}/"
+
+    while True:
+        await asyncio.sleep(300) # 5 minutes
+        if chunk_queue and chunk_queue.qsize() > 0:
+            try:
+                async with httpx.AsyncClient() as client:
+                    await client.get(health_endpoint, timeout=5.0)
+                _env_log.info(f"Keep-alive ping sent to {health_endpoint} (Queue size: {chunk_queue.qsize()})")
+            except Exception as e:
+                _env_log.info(f"Keep-alive ping failed: {e}")
+
 @app.on_event("startup")
 async def _diagnose_env():
     global chunk_queue
@@ -102,6 +119,7 @@ async def _diagnose_env():
 
     asyncio.create_task(background_worker_pool())
     asyncio.create_task(dcp_startup_recovery())
+    asyncio.create_task(keep_alive_task())
 
 
 security = HTTPBearer(auto_error=True)
@@ -1203,6 +1221,16 @@ async def dcp_startup_recovery():
             ))
         ))
         for chunk in recoverable_chunks:
+            if chunk.get("status") == "PROCESSING":
+                meeting_id = chunk.get("meeting_id")
+                if meeting_id:
+                    # Decrement processing_chunks to fix phantom count
+                    await update_meeting_stats_with_etag(meeting_id, processing_delta=-1)
+                
+                # Reset chunk status
+                chunk["status"] = "QUEUED"
+                await asyncio.to_thread(jobs_cont.upsert_item, chunk)
+                
             chunk_queue.put_nowait(chunk["id"])
     except Exception as e:
         print(f"Recovery failed: {e}")
