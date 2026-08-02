@@ -565,12 +565,17 @@ if (!gotTheLock) {
         // Silent Wake-Up Ping: Instantly wake up the backend server on application startup.
         // If launched via system boot (--hidden), this ensures the backend is awake before the user ever opens the UI.
         const API_URL = isDev ? "http://localhost:8000" : "https://threadnotes-backend-ih96.onrender.com";
-        try {
-            const req = net.request(API_URL);
-            req.on('response', () => { console.log("[ThreadNotes] Sent silent wake-up ping to backend."); });
-            req.on('error', () => {});
-            req.end();
-        } catch (e) {}
+        const sendWakeUpPing = () => {
+            try {
+                const req = net.request(API_URL);
+                req.on('response', () => { console.log("[ThreadNotes] Sent silent wake-up ping to backend."); });
+                req.on('error', () => {});
+                req.end();
+            } catch (e) {}
+        };
+
+        // Silent Wake-Up Ping: Instantly wake up the backend server on application startup.
+        sendWakeUpPing();
 
         Store = (await import('electron-store')).default;
         store = new Store();
@@ -589,6 +594,8 @@ if (!gotTheLock) {
         });
 
         powerMonitor.on('resume', () => {
+            // Send wake-up ping when the laptop lid is opened / wakes from sleep!
+            sendWakeUpPing();
             if (jobMonitor) jobMonitor.resumeAll();
         });
 
