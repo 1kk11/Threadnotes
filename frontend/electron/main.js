@@ -562,6 +562,16 @@ if (!gotTheLock) {
         console.log("[ThreadNotes] Recordings  :", getRecordingsDirectory());
         console.log("[ThreadNotes] Transcripts :", getLocalTranscriptsDirectory());
 
+        // Silent Wake-Up Ping: Instantly wake up the backend server on application startup.
+        // If launched via system boot (--hidden), this ensures the backend is awake before the user ever opens the UI.
+        const API_URL = isDev ? "http://localhost:8000" : "https://threadnotes-backend-ih96.onrender.com";
+        try {
+            const req = net.request(API_URL);
+            req.on('response', () => { console.log("[ThreadNotes] Sent silent wake-up ping to backend."); });
+            req.on('error', () => {});
+            req.end();
+        } catch (e) {}
+
         Store = (await import('electron-store')).default;
         store = new Store();
         const JobMonitor = require('./background/JobMonitor');
