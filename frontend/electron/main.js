@@ -494,9 +494,9 @@ function createWindow() {
     });
 
     win.once("ready-to-show", () => {
-        win.maximize();
         // If launched silently on system boot, don't show the window, just run in background
         if (!process.argv.includes("--hidden")) {
+            win.maximize();
             win.show();
         }
     });
@@ -552,6 +552,7 @@ if (!gotTheLock) {
         if (mainWindow) {
             if (mainWindow.isMinimized()) mainWindow.restore();
             if (!mainWindow.isVisible()) mainWindow.show();
+            if (!mainWindow.isMaximized()) mainWindow.maximize();
             mainWindow.focus();
         }
     });
