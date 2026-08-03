@@ -653,10 +653,12 @@ export default function Dashboard() {
       
       if (sid !== sessionIdRef.current) return;
       
+      const localTopicName = `Meeting ${meetingId}`;
+      
       // Save meeting explicitly with the meeting ID returned by init
       const record = {
         id: meetingId,
-        topic: topicName,
+        topic: localTopicName,
         date: new Date().toISOString(),
         transcript: [],
         filePath: undefined,
@@ -669,7 +671,7 @@ export default function Dashboard() {
       
       addMeeting(record);
       if (typeof window !== 'undefined' && (window as any).electronAPI) {
-        (window as any).electronAPI.registerJob(meetingId, topicName);
+        (window as any).electronAPI.registerJob(meetingId, localTopicName);
       }
       
       setStatusMessage("Job started! You can check progress in My Meetings.");
