@@ -535,7 +535,7 @@ function createWindow() {
 app.setAppUserModelId("com.threadnotes.desktop");
 
 // Configure auto-launch on system boot
-if (process.defaultApp === false) { // Don't auto-launch in development mode
+if (app.isPackaged) { // Don't auto-launch in development mode
     app.setLoginItemSettings({
         openAtLogin: true,
         args: [
