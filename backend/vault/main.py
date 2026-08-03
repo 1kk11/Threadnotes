@@ -1241,7 +1241,12 @@ class InitJobRequest(BaseModel):
 
 @app.post("/jobs/init")
 async def init_meeting_job(req: InitJobRequest, user: dict = Depends(get_current_user)):
-    meeting_id = str(uuid.uuid4())
+    meeting_id = str(int(datetime.now(timezone.utc).timestamp() * 1000))
+    # If the frontend passes a placeholder topic, we can update it to include the neat ID.
+    actual_topic = req.topic
+    if req.topic in ["", "Processing...", "Meeting"]:
+        actual_topic = f"Meeting {meeting_id}"
+        
     meeting_doc = {
         "id": meeting_id,
         "type": "meeting",
@@ -1252,7 +1257,7 @@ async def init_meeting_job(req: InitJobRequest, user: dict = Depends(get_current
         "uploaded_chunks": 0,
         "processing_chunks": 0,
         "failed_chunks": 0,
-        "topic": req.topic,
+        "topic": actual_topic,
         "created_at": datetime.now(timezone.utc).isoformat()
     }
     jobs_cont = get_jobs_container()

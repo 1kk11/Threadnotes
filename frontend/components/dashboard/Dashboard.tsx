@@ -645,7 +645,7 @@ export default function Dashboard() {
     setStatusMessage("Starting background job...");
     
     try {
-      const topicName = lines.length > 0 ? lines[0].split(" ").slice(0, 5).join(" ") : "Meeting";
+      const topicName = "Meeting";
       const meetingId = await diarizeAudioFileBackground(audioFilePath, topicName, {
         jwt: localStorage.getItem("token"),
         signal: uploadAbortRef.current?.signal,
@@ -896,8 +896,6 @@ export default function Dashboard() {
               timestamp: "",
             }))
           : lines.map((l) => ({ speaker: "Speaker", text: l, timestamp: "" }));
-      const firstWords =
-        entries[0]?.text.split(" ").slice(0, 5).join(" ") || "Discussion";
       const durationSec =
         mergedTranscript.length > 0
           ? Math.round(
@@ -945,9 +943,10 @@ export default function Dashboard() {
         }
       }
       setSaveProgress(100);
+      const meetingId = Date.now().toString();
       const record = {
-        id: Date.now().toString(),
-        topic: savedName || `Meeting on ${firstWords}`,
+        id: meetingId,
+        topic: savedName || `Meeting ${meetingId}`,
         date: new Date().toISOString(),
         transcript: entries,
         filePath: savedFilePath,
