@@ -1336,9 +1336,11 @@ async def get_job_progress(meeting_id: str, user: dict = Depends(get_current_use
             "merged_transcript": meeting_job.get("merged_transcript", []),
             "error": meeting_job.get("error", None)
         }
+    except exceptions.CosmosResourceNotFoundError:
+        raise HTTPException(status_code=404, detail="Job not found")
     except Exception as exc:
         traceback.print_exc()
-        raise HTTPException(status_code=404, detail="Job not found")
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 if __name__ == "__main__":
