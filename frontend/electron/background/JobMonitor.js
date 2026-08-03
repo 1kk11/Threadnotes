@@ -220,6 +220,12 @@ class JobMonitor {
             }
 
             if (!res.ok) {
+                if (res.status === 404) {
+                    this.addTimelineEvent(meetingId, "JOB_FAILED", { error: "Job not found on server (404)" });
+                    console.error(`[JobMonitor][${meetingId}] 404 Not Found, failing job immediately.`);
+                    this.handleJobFailed(meetingId, { error: "Job not found on server (404)" });
+                    return;
+                }
                 throw new Error(`HTTP ${res.status}`);
             }
 

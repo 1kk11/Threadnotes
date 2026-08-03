@@ -338,6 +338,14 @@ export default function MyMeetings() {
           });
           clearTimeout(wakeTimer);
           if (!res.ok) {
+             if (res.status === 404) {
+               updateMeeting(m.id, {
+                 status: 'FAILED',
+                 error: 'Job not found on server (404)'
+               });
+               loadLocalMeetings();
+               continue;
+             }
              setJobProgress(prev => ({
                ...prev,
                [m.id]: prev[m.id] || { status: "waking_server", pct: 0, processing: 0, completed: 0, failed: 0, total: 0 }
