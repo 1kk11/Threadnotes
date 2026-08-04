@@ -814,6 +814,15 @@ def _create_diarized_transcription(client, deployment, safe_name, audio_bytes, m
     try:
         return client.audio.transcriptions.create(**base)
     except Exception as exc:
+        msg = str(exc).lower()
+        if "corrupted or unsupported" in msg and len(audio_bytes) < 1000000:
+            print(f"Skipping tiny/corrupted chunk of size {len(audio_bytes)}", flush=True)
+            # Create a mock object that mimics a successful transcription object
+            class DummySegment:
+                def __init__(self):
+                    self.segments = []
+            return DummySegment()
+            
         body = getattr(getattr(exc, "response", None), "text", None)
         status = getattr(getattr(exc, "response", None), "status_code", None)
         print(
@@ -1071,11 +1080,18 @@ def _run_transcription(audio_bytes: bytes, filename: str, content_type: str = ""
     ).strip()
     safe_name = filename or "audio.ogg"
     mime = content_type or "audio/ogg"
-    resp = client.audio.transcriptions.create(
-        model=deployment,
-        file=(safe_name, audio_bytes, mime),
-        response_format="text",
-    )
+    try:
+        resp = client.audio.transcriptions.create(
+            model=deployment,
+            file=(safe_name, audio_bytes, mime),
+            response_format="text",
+        )
+    except Exception as exc:
+        msg = str(exc).lower()
+        if "corrupted or unsupported" in msg and len(audio_bytes) < 1000000:
+            print(f"Skipping tiny/corrupted chunk of size {len(audio_bytes)}", flush=True)
+            return ""
+        raise
     if isinstance(resp, str):
         return resp.strip()
     return (getattr(resp, "text", "") or str(resp)).strip()
