@@ -1218,7 +1218,8 @@ async def background_worker_pool():
 
     while True:
         chunk_id = await chunk_queue.get()
-        asyncio.create_task(process_chunk_task(chunk_id))
+        # Process sequentially to avoid Azure Whisper 429 Rate Limits
+        await process_chunk_task(chunk_id)
         chunk_queue.task_done()
 
 async def dcp_startup_recovery():
