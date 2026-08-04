@@ -817,11 +817,7 @@ def _create_diarized_transcription(client, deployment, safe_name, audio_bytes, m
         msg = str(exc).lower()
         if "corrupted or unsupported" in msg and len(audio_bytes) < 1000000:
             print(f"Skipping tiny/corrupted chunk of size {len(audio_bytes)}", flush=True)
-            # Create a mock object that mimics a successful transcription object
-            class DummySegment:
-                def __init__(self):
-                    self.segments = []
-            return DummySegment()
+            return {"segments": []}
             
         body = getattr(getattr(exc, "response", None), "text", None)
         status = getattr(getattr(exc, "response", None), "status_code", None)
