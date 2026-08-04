@@ -347,7 +347,6 @@ def _build_gmail_service():
                 print("[GMAIL] access token expired — refreshing via refresh_token")
                 creds.refresh(Request())
             else:
-                print("[GMAIL] token missing or invalid, starting local browser auth flow...")
                 flow = InstalledAppFlow.from_client_secrets_file(GMAIL_CREDENTIALS_PATH, GMAIL_SCOPES)
                 creds = flow.run_local_server(port=0)
             
