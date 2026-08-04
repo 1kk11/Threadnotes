@@ -815,7 +815,7 @@ def _create_diarized_transcription(client, deployment, safe_name, audio_bytes, m
         return client.audio.transcriptions.create(**base)
     except Exception as exc:
         msg = str(exc).lower()
-        if "corrupted or unsupported" in msg and len(audio_bytes) < 1000000:
+        if "corrupted or unsupported" in msg:
             print(f"Skipping tiny/corrupted chunk of size {len(audio_bytes)}", flush=True)
             return {"segments": []}
             
@@ -1084,7 +1084,7 @@ def _run_transcription(audio_bytes: bytes, filename: str, content_type: str = ""
         )
     except Exception as exc:
         msg = str(exc).lower()
-        if "corrupted or unsupported" in msg and len(audio_bytes) < 1000000:
+        if "corrupted or unsupported" in msg:
             print(f"Skipping tiny/corrupted chunk of size {len(audio_bytes)}", flush=True)
             return ""
         raise

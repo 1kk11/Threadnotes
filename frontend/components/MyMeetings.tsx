@@ -831,7 +831,7 @@ export default function MyMeetings() {
                       {((!meeting.transcript || meeting.transcript.length === 0) && !meeting.plainText && !meeting.diarized) ? (
                         <div className="flex-1 sm:flex-none flex flex-col gap-1.5 min-w-[150px]">
                            {jobProgress[meeting.id]?.status === "error" || meeting.status === 'FAILED' ? (
-                             <span className="text-xs font-bold text-red-500">Processing Failed{meeting.error ? `: ${meeting.error}` : ""}</span>
+                             <span className="text-xs font-bold text-red-500 line-clamp-2 break-all max-w-[200px]" title={meeting.error}>Processing Failed{meeting.error ? `: ${meeting.error}` : ""}</span>
                             ) : jobProgress[meeting.id]?.status === "connecting" ? (
                               <div className="flex items-center gap-2 text-slate-500" title="Syncing status with server...">
                                 <svg className="animate-spin h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none">
