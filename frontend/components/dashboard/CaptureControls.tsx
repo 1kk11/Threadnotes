@@ -500,13 +500,10 @@ export default function CaptureControls({
 
 
             {isUploadingFile && (
-              <div className="shrink-0">
-                <div className="mb-1 flex items-center justify-between">
+              <div className="shrink-0 w-full max-w-xs mx-auto mt-2">
+                <div className="mb-1 flex items-center justify-center gap-1.5">
                   <span className="text-[11px] font-semibold uppercase tracking-wider text-violet-500">
-                    Uploading
-                  </span>
-                  <span className="text-[11px] font-semibold tabular-nums text-slate-600">
-                    {Math.round(Math.min(100, Math.max(0, fileUploadPct)))}%
+                    Uploading {Math.round(Math.min(100, Math.max(0, fileUploadPct)))}%
                   </span>
                 </div>
                 <div className="h-2 w-full overflow-hidden rounded-full bg-slate-200/70">
