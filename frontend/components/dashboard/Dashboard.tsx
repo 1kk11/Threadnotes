@@ -114,6 +114,7 @@ export default function Dashboard() {
   );
   const [audioFilePath, setAudioFilePath] = useState<string | null>(null);
   const [showDiarizeRetryModal, setShowDiarizeRetryModal] = useState(false);
+  const [showDiarizeChoiceModal, setShowDiarizeChoiceModal] = useState(false);
   const [savedMeetingId, setSavedMeetingId] = useState<string | null>(null);
   const [highlights, setHighlights] = useState<string[]>([]);
   const [showHighlights, setShowHighlights] = useState(true);
@@ -591,7 +592,7 @@ export default function Dashboard() {
 
     setIsDiarizing(true);
     setDiarizeProgress(2);
-    setStatusMessage("Separating speakers...");
+    setStatusMessage("Uploading file for diarization...");
     try {
       const rows = (await diarizeAudioFile(audioFilePath, {
         jwt: localStorage.getItem("token"),
@@ -642,7 +643,7 @@ export default function Dashboard() {
     
     setIsDiarizing(true);
     setDiarizeProgress(2);
-    setStatusMessage("Starting background job...");
+    setStatusMessage("Uploading file for background diarization...");
     
     try {
       const topicName = "Meeting";
@@ -674,7 +675,7 @@ export default function Dashboard() {
         (window as any).electronAPI.registerJob(meetingId, localTopicName);
       }
       
-      setStatusMessage("Job started! You can check progress in My Meetings.");
+      setStatusMessage("Your file has been uploaded. You can now close the application.");
       setIsSaved(true);
       setSavedMeetingId(meetingId);
       
@@ -1373,20 +1374,13 @@ export default function Dashboard() {
                             Play to highlight the transcript in sync
                           </p>
                           {mergedTranscript.length === 0 ? (
-                            <div className="flex gap-2">
+                            <div className="flex gap-2 mr-8">
                               <button
-                                onClick={handleDiarizeRetry}
+                                onClick={() => setShowDiarizeChoiceModal(true)}
                                 disabled={isDiarizing || !audioFilePath}
-                                className="shrink-0 rounded-lg bg-linear-to-r from-[#2FB5AA] to-[#2E6DBE] px-4 py-1.5 text-xs font-semibold text-white shadow-sm transition-all hover:from-[#28a29a] hover:to-[#2a61a8] disabled:cursor-not-allowed disabled:opacity-60"
+                                className="shrink-0 rounded-lg bg-linear-to-r from-[#2FB5AA] to-[#2E6DBE] px-6 py-2 text-sm font-semibold text-white shadow-sm transition-all hover:from-[#28a29a] hover:to-[#2a61a8] disabled:cursor-not-allowed disabled:opacity-60"
                               >
                                 {isDiarizing ? "Diarizing…" : "Diarize"}
-                              </button>
-                              <button
-                                onClick={handleDiarizeBackground}
-                                disabled={isDiarizing || !audioFilePath}
-                                className="shrink-0 rounded-lg border border-[#2E6DBE] text-[#2E6DBE] px-4 py-1.5 text-xs font-semibold shadow-sm transition-all hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
-                              >
-                                Diarize in Background
                               </button>
                             </div>
                           ) : transcriptText ? (
@@ -1781,6 +1775,39 @@ export default function Dashboard() {
                 className="flex-1 rounded-xl bg-linear-to-r from-violet-500 to-blue-500 py-3 text-sm font-bold text-white shadow-lg shadow-violet-500/25 transition-all hover:from-violet-600 hover:to-blue-600 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Retry
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showDiarizeChoiceModal && (
+        <div className="fixed inset-0 z-100 flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-sm rounded-3xl border border-white/60 bg-white p-7 shadow-2xl">
+            <h3 className="text-xl font-bold text-slate-900">
+              How would you like to proceed?
+            </h3>
+            <p className="mt-2 text-sm text-slate-500">
+              Choose your preferred method for diarization.
+            </p>
+            <div className="mt-7 flex flex-col gap-3 sm:flex-row">
+              <button
+                onClick={() => {
+                  setShowDiarizeChoiceModal(false);
+                  handleDiarizeRetry();
+                }}
+                className="flex-1 rounded-xl bg-linear-to-r from-[#2FB5AA] to-[#2E6DBE] py-3 text-sm font-bold text-white shadow-lg shadow-[#2FB5AA]/25 transition-all hover:from-[#28a29a] hover:to-[#2a61a8]"
+              >
+                Diarize Now
+              </button>
+              <button
+                onClick={() => {
+                  setShowDiarizeChoiceModal(false);
+                  handleDiarizeBackground();
+                }}
+                className="flex-1 rounded-xl bg-slate-100 py-3 text-sm font-bold text-slate-700 transition-colors hover:bg-slate-200"
+              >
+                Diarize in Background
               </button>
             </div>
           </div>
