@@ -2,7 +2,7 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "https://threadnotes-cloud-vault.onrender.com/:path*"
+      "destination": "https://threadnotes-backend-ih96.onrender.com/:path*"
     }
   ]
 }
