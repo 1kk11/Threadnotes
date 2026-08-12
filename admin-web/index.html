@@ -175,6 +175,21 @@
       </div>
     </div>
 
+    <div id="pendingModal" class="fixed inset-0 z-50 hidden items-center justify-center bg-navy/40 p-4 backdrop-blur-sm">
+      <div class="w-full max-w-md rounded-2xl border border-white/70 bg-white p-7 shadow-2xl flex flex-col max-h-[80vh]">
+        <h3 class="text-lg font-bold">Pending Approvals</h3>
+        <p class="mt-1 text-xs text-slate-500 mb-4">Review and approve new user accounts.</p>
+        
+        <div class="flex-1 overflow-auto rounded-lg border border-slate-200 bg-white shadow-inner">
+          <ul id="pendingList" class="divide-y divide-slate-100"></ul>
+        </div>
+
+        <div class="mt-6 flex justify-end">
+          <button onclick="closeModals()" class="rounded-xl bg-slate-100 px-6 py-2.5 text-sm font-bold text-slate-700 transition-colors hover:bg-slate-200">Close</button>
+        </div>
+      </div>
+    </div>
+
     <div id="toast" class="pointer-events-none fixed bottom-6 left-1/2 z-[60] hidden -translate-x-1/2 rounded-xl bg-navy px-4 py-2.5 text-sm font-semibold text-white shadow-xl"></div>
 
     <script>
@@ -184,7 +199,6 @@
       
       let pendingUserId = null;
       let allUsers = [];
-      let showOnlyPending = false;
 
       const getToken = () => localStorage.getItem(TOKEN_KEY) || "";
       const authHeaders = () => ({ "Authorization": "Bearer " + getToken(), "Content-Type": "application/json" });
@@ -287,18 +301,15 @@
           $("pendingBadge").textContent = pendingCount;
         } else {
           $("pendingBtn").classList.add("hidden");
-          showOnlyPending = false; // Reset if none pending
         }
 
-        const usersToRender = showOnlyPending ? allUsers.filter(u => u.status === 'pending') : allUsers;
-
-        if (!usersToRender.length) {
+        if (!allUsers.length) {
           body.innerHTML = "";
-          state.textContent = showOnlyPending ? "No pending users." : "No users have registered yet.";
+          state.textContent = "No users have registered yet.";
           state.classList.remove("hidden");
         } else {
           state.classList.add("hidden");
-          body.innerHTML = usersToRender.map(rowHtml).join("");
+          body.innerHTML = allUsers.map(rowHtml).join("");
         }
       }
 
@@ -367,6 +378,7 @@
       function closeModals() {
         $("deleteModal").classList.add("hidden"); $("deleteModal").classList.remove("flex");
         $("quotaModal").classList.add("hidden"); $("quotaModal").classList.remove("flex");
+        $("pendingModal").classList.add("hidden"); $("pendingModal").classList.remove("flex");
       }
 
       function openDelete(id, name) {
@@ -408,8 +420,34 @@
           const res = await fetch(API_BASE + `/admin/users/${id}/approve`, { method: "POST", headers: authHeaders() });
           if (!res.ok) throw new Error("Approve failed");
           showToast("User approved!");
-          loadUsers();
+          await loadUsers();
+          // If modal is open, refresh it
+          if (!$("pendingModal").classList.contains("hidden")) {
+            openPendingModal();
+          }
         } catch (ex) { showToast(ex.message); }
+      }
+
+      function openPendingModal() {
+        const pending = allUsers.filter(u => u.status === 'pending');
+        if (pending.length === 0) {
+          closeModals();
+          return;
+        }
+        
+        const listHtml = pending.map(u => `
+          <li class="flex items-center justify-between p-4 hover:bg-slate-50 transition-colors">
+            <div>
+              <div class="font-bold text-navy text-sm">${esc(u.name || "—")}</div>
+              <div class="text-xs text-slate-500">${esc(u.email || "—")}</div>
+            </div>
+            <button onclick="approveUser('${u.id}')" class="rounded-lg bg-teal px-4 py-2 text-xs font-bold text-white hover:bg-teal/80 shadow-sm shadow-teal/20 transition-all active:scale-95">Approve</button>
+          </li>
+        `).join("");
+        
+        $("pendingList").innerHTML = listHtml;
+        $("pendingModal").classList.remove("hidden");
+        $("pendingModal").classList.add("flex");
       }
 
       async function saveQuota() {
@@ -442,15 +480,7 @@
       $("confirmDelete").addEventListener("click", doDelete);
       $("confirmQuota").addEventListener("click", saveQuota);
       
-      $("pendingBtn").addEventListener("click", () => {
-        showOnlyPending = !showOnlyPending;
-        if (showOnlyPending) {
-          $("pendingBtn").classList.add("ring-2", "ring-amber-400");
-        } else {
-          $("pendingBtn").classList.remove("ring-2", "ring-amber-400");
-        }
-        renderTable();
-      });
+      $("pendingBtn").addEventListener("click", openPendingModal);
       
       if (getToken()) showDash();
       else showLogin();
