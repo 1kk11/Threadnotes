@@ -152,19 +152,19 @@
         <div class="space-y-4">
           <div class="flex items-center justify-between">
             <span class="text-sm font-semibold">Live (L)</span>
-            <input type="number" id="quota_L" min="0" class="w-24 rounded-lg border px-3 py-1 text-sm outline-none focus:border-teal">
+            <input type="text" id="quota_L" placeholder="HH:MM:SS" class="w-24 rounded-lg border px-3 py-1 text-sm outline-none focus:border-teal text-center">
           </div>
           <div class="flex items-center justify-between">
             <span class="text-sm font-semibold">Upload (U)</span>
-            <input type="number" id="quota_U" min="0" class="w-24 rounded-lg border px-3 py-1 text-sm outline-none focus:border-teal">
+            <input type="text" id="quota_U" placeholder="HH:MM:SS" class="w-24 rounded-lg border px-3 py-1 text-sm outline-none focus:border-teal text-center">
           </div>
           <div class="flex items-center justify-between">
             <span class="text-sm font-semibold">Diarization (D)</span>
-            <input type="number" id="quota_D" min="0" class="w-24 rounded-lg border px-3 py-1 text-sm outline-none focus:border-teal">
+            <input type="text" id="quota_D" placeholder="HH:MM:SS" class="w-24 rounded-lg border px-3 py-1 text-sm outline-none focus:border-teal text-center">
           </div>
           <div class="flex items-center justify-between">
             <span class="text-sm font-semibold">Background (B)</span>
-            <input type="number" id="quota_B" min="0" class="w-24 rounded-lg border px-3 py-1 text-sm outline-none focus:border-teal">
+            <input type="text" id="quota_B" placeholder="HH:MM:SS" class="w-24 rounded-lg border px-3 py-1 text-sm outline-none focus:border-teal text-center">
           </div>
         </div>
 
@@ -223,6 +223,14 @@
         const m = Math.floor((sec % 3600) / 60).toString().padStart(2, '0');
         const s = Math.floor(sec % 60).toString().padStart(2, '0');
         return `${h}:${m}:${s}`;
+      }
+
+      function parseDur(str) {
+        if (!str) return 0;
+        const p = str.split(':').map(x => parseInt(x) || 0);
+        if (p.length === 3) return p[0]*3600 + p[1]*60 + p[2];
+        if (p.length === 2) return p[0]*60 + p[1];
+        return p[0];
       }
 
       function initials(name, email) { return (name || email || "?").trim().charAt(0).toUpperCase(); }
@@ -394,7 +402,7 @@
         
         ['L', 'U', 'D', 'B'].forEach(type => {
           const sec = user.quotas?.[type]?.allocated || 0;
-          $(`quota_${type}`).value = Math.floor(sec / 3600);
+          $(`quota_${type}`).value = fmtDur(sec);
         });
 
         $("quotaModal").classList.remove("hidden"); $("quotaModal").classList.add("flex");
@@ -457,8 +465,8 @@
         try {
           const req = { quotas: {} };
           ['L', 'U', 'D', 'B'].forEach(type => {
-            const hrs = parseInt($(`quota_${type}`).value || "0");
-            req.quotas[type] = { allocated: hrs * 3600 };
+            const val = $(`quota_${type}`).value;
+            req.quotas[type] = { allocated: parseDur(val) };
           });
 
           const res = await fetch(API_BASE + `/admin/users/${pendingUserId}/quota`, { 
