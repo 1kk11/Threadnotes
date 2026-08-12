@@ -153,7 +153,7 @@ def check_quota(user_email: str, quota_type: str, duration_sec: float = 0):
     q = quotas[quota_type]
     
     if q["used"] >= q["allocated"]:
-        raise HTTPException(status_code=403, detail=f"Quota exceeded for {quota_type}. Please ask admin for approval.")
+        raise HTTPException(status_code=403, detail="Quota exceeded for you. Please ask admin for approval.")
         
     if duration_sec > 0:
         q["used"] += duration_sec
