@@ -112,7 +112,7 @@ export default function AuthPage() {
         setInfo({
           title: "Account Created",
           message:
-            "Your account was created successfully. Please log in to continue.",
+            "Your account was created successfully and is pending administrator approval. You will not be able to log in until it is approved.",
         });
         setAuthMode("login");
         setPassword("");

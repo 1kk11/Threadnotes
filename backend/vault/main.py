@@ -16,8 +16,11 @@ import bcrypt
 import jwt
 import httpx
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, Form, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Depends, Header, BackgroundTasks, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi.security import OAuth2PasswordBearer
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, EmailStr
 
 from azure.cosmos import CosmosClient, exceptions
@@ -129,6 +132,32 @@ signup_otp_storage: Dict[str, dict] = {}
 verified_emails: Dict[str, datetime] = {}
 
 _users_cont = None
+
+def check_quota(user_email: str, quota_type: str, duration_sec: float = 0):
+    users_cont = get_users_container()
+    user_list = list(
+        users_cont.query_items(
+            "SELECT * FROM c WHERE c.email = @email",
+            parameters=[{"name": "@email", "value": user_email}],
+            enable_cross_partition_query=True,
+        )
+    )
+    if not user_list:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    user_doc = user_list[0]
+    quotas = user_doc.get("quotas", {})
+    if quota_type not in quotas:
+        return # Skip if user has old format
+        
+    q = quotas[quota_type]
+    
+    if q["used"] >= q["allocated"]:
+        raise HTTPException(status_code=403, detail=f"Quota exceeded for {quota_type}. Please ask admin for approval.")
+        
+    if duration_sec > 0:
+        q["used"] += duration_sec
+        users_cont.upsert_item(user_doc)
 
 
 def get_users_container():
@@ -484,6 +513,13 @@ def signup(user: UserSignup):
         "email": user.email,
         "password": hashed_pw,
         "createdAt": datetime.now(timezone.utc).isoformat(),
+        "status": "pending",
+        "quotas": {
+            "L": {"allocated": 36000, "used": 0},
+            "U": {"allocated": 36000, "used": 0},
+            "D": {"allocated": 36000, "used": 0},
+            "B": {"allocated": 36000, "used": 0}
+        }
     }
     users_cont.create_item(user_doc)
     verified_emails.pop(user.email, None)
@@ -505,6 +541,9 @@ def login(user: UserLogin):
         user.password.encode("utf-8"), user_list[0]["password"].encode("utf-8")
     ):
         raise HTTPException(status_code=401, detail="Invalid credentials")
+
+    if user_list[0].get("status", "approved") == "pending":
+        raise HTTPException(status_code=403, detail="Your account is pending approval.")
 
     token_data = {
         "sub": user_list[0]["email"],
@@ -706,12 +745,65 @@ def admin_list_users(admin: dict = Depends(get_current_admin)):
     users_cont = get_users_container()
     rows = list(
         users_cont.query_items(
-            "SELECT c.id, c.name, c.email, c.createdAt FROM c",
+            "SELECT c.id, c.name, c.email, c.createdAt, c.status, c.quotas FROM c",
             enable_cross_partition_query=True,
         )
     )
     rows.sort(key=lambda u: u.get("createdAt") or "", reverse=True)
     return {"status": "success", "users": rows, "count": len(rows)}
+
+@app.post("/admin/users/{user_id}/approve")
+def admin_approve_user(user_id: str, admin: dict = Depends(get_current_admin)):
+    users_cont = get_users_container()
+    user_list = list(
+        users_cont.query_items(
+            "SELECT * FROM c WHERE c.id = @id",
+            parameters=[{"name": "@id", "value": user_id}],
+            enable_cross_partition_query=True,
+        )
+    )
+    if not user_list:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    user_doc = user_list[0]
+    user_doc["status"] = "approved"
+    users_cont.upsert_item(user_doc)
+    return {"status": "success", "message": "User approved"}
+
+class QuotaUpdateRequest(BaseModel):
+    quotas: dict
+
+@app.post("/admin/users/{user_id}/quota")
+def admin_update_quota(user_id: str, req: QuotaUpdateRequest, admin: dict = Depends(get_current_admin)):
+    users_cont = get_users_container()
+    user_list = list(
+        users_cont.query_items(
+            "SELECT * FROM c WHERE c.id = @id",
+            parameters=[{"name": "@id", "value": user_id}],
+            enable_cross_partition_query=True,
+        )
+    )
+    if not user_list:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    user_doc = user_list[0]
+    
+    # Initialize quotas if missing
+    if "quotas" not in user_doc:
+        user_doc["quotas"] = {
+            "L": {"allocated": 36000, "used": 0},
+            "U": {"allocated": 36000, "used": 0},
+            "D": {"allocated": 36000, "used": 0},
+            "B": {"allocated": 36000, "used": 0}
+        }
+        
+    # Update allocated time
+    for q_type, q_data in req.quotas.items():
+        if q_type in user_doc["quotas"] and "allocated" in q_data:
+            user_doc["quotas"][q_type]["allocated"] = q_data["allocated"]
+            
+    users_cont.upsert_item(user_doc)
+    return {"status": "success", "message": "Quotas updated"}
 
 
 @app.delete("/admin/users/{user_id}")
@@ -1047,6 +1139,11 @@ async def diarize_stream(
     audio_bytes = await file.read()
     if not audio_bytes:
         raise HTTPException(status_code=400, detail="Empty audio upload.")
+        
+    user_email = user.get("sub")
+    # Quick check before processing
+    check_quota(user_email, "D", 0)
+    
     try:
         segments = await asyncio.to_thread(
             _run_diarization,
@@ -1059,6 +1156,10 @@ async def diarize_stream(
     except Exception as exc:
         traceback.print_exc()
         return {"status": "error", "message": _friendly_diarize_error(exc)}
+
+    duration = segments[-1]["end"] if segments else 0
+    if duration > 0:
+        check_quota(user_email, "D", duration)
 
     return {
         "status": "success",
@@ -1080,17 +1181,26 @@ def _run_transcription(audio_bytes: bytes, filename: str, content_type: str = ""
         resp = client.audio.transcriptions.create(
             model=deployment,
             file=(safe_name, audio_bytes, mime),
-            response_format="text",
+            response_format="verbose_json",
         )
     except Exception as exc:
         msg = str(exc).lower()
         if "corrupted or unsupported" in msg:
             print(f"Skipping tiny/corrupted chunk of size {len(audio_bytes)}", flush=True)
-            return ""
+            return "", 0
         raise
+    
     if isinstance(resp, str):
-        return resp.strip()
-    return (getattr(resp, "text", "") or str(resp)).strip()
+        # Fallback if somehow it still returned string
+        return resp.strip(), 0
+        
+    text = getattr(resp, "text", "") or str(resp)
+    duration = getattr(resp, "duration", 0)
+    if isinstance(resp, dict):
+        text = resp.get("text", "")
+        duration = resp.get("duration", 0)
+        
+    return text.strip(), duration
 
 
 @app.post("/transcribe/stream")
@@ -1101,8 +1211,12 @@ async def transcribe_stream(
     audio_bytes = await file.read()
     if not audio_bytes:
         raise HTTPException(status_code=400, detail="Empty audio upload.")
+        
+    user_email = user.get("sub")
+    check_quota(user_email, "U", 0)
+    
     try:
-        text = await asyncio.to_thread(
+        text, duration = await asyncio.to_thread(
             _run_transcription,
             audio_bytes,
             file.filename or "audio.ogg",
@@ -1113,6 +1227,9 @@ async def transcribe_stream(
     except Exception as exc:
         traceback.print_exc()
         return {"status": "error", "message": _friendly_diarize_error(exc)}
+
+    if duration > 0:
+        check_quota(user_email, "U", duration)
 
     return {"status": "success", "text": text}
 
@@ -1154,6 +1271,13 @@ async def background_worker_pool():
                 stream = await asyncio.to_thread(blob_client.download_blob)
                 audio_bytes = await asyncio.to_thread(stream.readall)
                 
+                # Check quota before processing
+                user_email = meeting_job.get("user_id")
+                try:
+                    await asyncio.to_thread(check_quota, user_email, "B", 0)
+                except HTTPException as e:
+                    raise Exception(e.detail)
+                
                 segments = await asyncio.to_thread(
                     _run_diarization,
                     audio_bytes,
@@ -1164,6 +1288,14 @@ async def background_worker_pool():
                 chunk_job["status"] = "COMPLETED"
                 chunk_job["segments"] = segments
                 await asyncio.to_thread(jobs_cont.upsert_item, chunk_job)
+                
+                # Deduct quota based on duration
+                duration = segments[-1]["end"] if segments else 0
+                if duration > 0:
+                    try:
+                        await asyncio.to_thread(check_quota, user_email, "B", duration)
+                    except Exception:
+                        pass # Non-fatal if quota exceeded after processing chunk
                 
                 # Decrement processing, increment completed
                 updated_meeting = await update_meeting_stats_with_etag(meeting_id, processing_delta=-1, completed_delta=1)
@@ -1253,6 +1385,9 @@ class InitJobRequest(BaseModel):
 
 @app.post("/jobs/init")
 async def init_meeting_job(req: InitJobRequest, user: dict = Depends(get_current_user)):
+    user_email = user.get("sub")
+    check_quota(user_email, "B", 0)
+    
     meeting_id = str(int(datetime.now(timezone.utc).timestamp() * 1000))
     # If the frontend passes a placeholder topic, we can update it to include the neat ID.
     actual_topic = req.topic
@@ -1359,6 +1494,10 @@ async def get_job_progress(meeting_id: str, user: dict = Depends(get_current_use
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(exc))
 
+import os
+admin_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "admin-web")
+if os.path.exists(admin_path):
+    app.mount("/admin", StaticFiles(directory=admin_path, html=True), name="admin")
 
 if __name__ == "__main__":
     import uvicorn
