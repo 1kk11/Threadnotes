@@ -184,6 +184,7 @@
       
       let pendingUserId = null;
       let allUsers = [];
+      let showOnlyPending = false;
 
       const getToken = () => localStorage.getItem(TOKEN_KEY) || "";
       const authHeaders = () => ({ "Authorization": "Bearer " + getToken(), "Content-Type": "application/json" });
@@ -270,23 +271,34 @@
           
           allUsers = data.users || [];
           $("userCount").textContent = data.count ?? allUsers.length;
-          
-          const pendingCount = allUsers.filter(u => u.status === 'pending').length;
-          if (pendingCount > 0) {
-            $("pendingBtn").classList.remove("hidden");
-            $("pendingBadge").textContent = pendingCount;
-          } else {
-            $("pendingBtn").classList.add("hidden");
-          }
-
-          if (!allUsers.length) {
-            state.textContent = "No users have registered yet.";
-            return;
-          }
-          state.classList.add("hidden");
-          body.innerHTML = allUsers.map(rowHtml).join("");
+          renderTable();
         } catch (ex) {
           state.textContent = ex.message || "Something went wrong.";
+        }
+      }
+
+      function renderTable() {
+        const body = $("usersBody");
+        const state = $("stateRow");
+        
+        const pendingCount = allUsers.filter(u => u.status === 'pending').length;
+        if (pendingCount > 0) {
+          $("pendingBtn").classList.remove("hidden");
+          $("pendingBadge").textContent = pendingCount;
+        } else {
+          $("pendingBtn").classList.add("hidden");
+          showOnlyPending = false; // Reset if none pending
+        }
+
+        const usersToRender = showOnlyPending ? allUsers.filter(u => u.status === 'pending') : allUsers;
+
+        if (!usersToRender.length) {
+          body.innerHTML = "";
+          state.textContent = showOnlyPending ? "No pending users." : "No users have registered yet.";
+          state.classList.remove("hidden");
+        } else {
+          state.classList.add("hidden");
+          body.innerHTML = usersToRender.map(rowHtml).join("");
         }
       }
 
@@ -429,6 +441,16 @@
       $("refreshBtn").addEventListener("click", loadUsers);
       $("confirmDelete").addEventListener("click", doDelete);
       $("confirmQuota").addEventListener("click", saveQuota);
+      
+      $("pendingBtn").addEventListener("click", () => {
+        showOnlyPending = !showOnlyPending;
+        if (showOnlyPending) {
+          $("pendingBtn").classList.add("ring-2", "ring-amber-400");
+        } else {
+          $("pendingBtn").classList.remove("ring-2", "ring-amber-400");
+        }
+        renderTable();
+      });
       
       if (getToken()) showDash();
       else showLogin();
