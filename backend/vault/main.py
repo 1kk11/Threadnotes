@@ -1181,7 +1181,7 @@ def _run_transcription(audio_bytes: bytes, filename: str, content_type: str = ""
         resp = client.audio.transcriptions.create(
             model=deployment,
             file=(safe_name, audio_bytes, mime),
-            response_format="verbose_json",
+            response_format="text",
         )
     except Exception as exc:
         msg = str(exc).lower()
@@ -1191,16 +1191,15 @@ def _run_transcription(audio_bytes: bytes, filename: str, content_type: str = ""
         raise
     
     if isinstance(resp, str):
-        # Fallback if somehow it still returned string
-        return resp.strip(), 0
+        text = resp.strip()
+    else:
+        text = (getattr(resp, "text", "") or str(resp)).strip()
         
-    text = getattr(resp, "text", "") or str(resp)
-    duration = getattr(resp, "duration", 0)
-    if isinstance(resp, dict):
-        text = resp.get("text", "")
-        duration = resp.get("duration", 0)
-        
-    return text.strip(), duration
+    # Estimate duration since 'text' format doesn't provide it.
+    # The frontend encodes at 24kbps (3000 bytes/sec).
+    duration = len(audio_bytes) / 3000.0
+    
+    return text, duration
 
 
 @app.post("/transcribe/stream")
