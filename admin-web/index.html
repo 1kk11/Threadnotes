@@ -178,7 +178,7 @@
     <div id="toast" class="pointer-events-none fixed bottom-6 left-1/2 z-[60] hidden -translate-x-1/2 rounded-xl bg-navy px-4 py-2.5 text-sm font-semibold text-white shadow-xl"></div>
 
     <script>
-      const API_BASE = "";
+      const API_BASE = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1" ? "" : "/api";
       const $ = (id) => document.getElementById(id);
       const TOKEN_KEY = "tn_admin_token";
       
