@@ -717,6 +717,13 @@ def get_current_admin(
     return payload
 
 
+admin_otp_store = {}
+
+class AdminLoginVerify(BaseModel):
+    email: str
+    password: str
+    otp: str
+
 @app.post("/admin/login")
 def admin_login(req: AdminLogin):
     if not ADMIN_EMAIL or not ADMIN_PASSWORD:
@@ -729,6 +736,47 @@ def admin_login(req: AdminLogin):
         or req.password != ADMIN_PASSWORD
     ):
         raise HTTPException(status_code=401, detail="Invalid admin credentials")
+        
+    import random
+    otp = f"{random.randint(0, 999999):06d}"
+    email_key = req.email.strip().lower()
+    admin_otp_store[email_key] = {
+        "otp": otp,
+        "exp": datetime.now(timezone.utc) + timedelta(minutes=5)
+    }
+    
+    send_otp_email(email_key, otp, "Admin Login")
+    
+    return {"status": "otp_required", "message": "OTP sent to your email"}
+
+@app.post("/admin/login/verify")
+def admin_login_verify(req: AdminLoginVerify):
+    if not ADMIN_EMAIL or not ADMIN_PASSWORD:
+        raise HTTPException(
+            status_code=500,
+            detail="Admin login is not configured on the server.",
+        )
+    if (
+        req.email.strip().lower() != ADMIN_EMAIL.lower()
+        or req.password != ADMIN_PASSWORD
+    ):
+        raise HTTPException(status_code=401, detail="Invalid admin credentials")
+        
+    email_key = req.email.strip().lower()
+    otp_data = admin_otp_store.get(email_key)
+    
+    if not otp_data:
+        raise HTTPException(status_code=400, detail="No OTP requested or OTP has expired.")
+        
+    if datetime.now(timezone.utc) > otp_data["exp"]:
+        admin_otp_store.pop(email_key, None)
+        raise HTTPException(status_code=400, detail="OTP has expired.")
+        
+    if otp_data["otp"] != req.otp.strip():
+        raise HTTPException(status_code=401, detail="Invalid OTP.")
+        
+    admin_otp_store.pop(email_key, None)
+    
     token_data = {
         "sub": ADMIN_EMAIL,
         "role": "admin",

@@ -51,12 +51,20 @@
             <input id="email" type="email" required autocomplete="username"
               class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-teal focus:ring-2 focus:ring-teal/30" />
           </div>
-          <div>
+          <div id="passwordWrapper">
             <label class="mb-1 block text-xs font-bold uppercase tracking-wide text-slate-500">Password</label>
             <div class="relative">
               <input id="password" type="password" required autocomplete="current-password"
                 class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 pr-10 text-sm outline-none focus:border-teal focus:ring-2 focus:ring-teal/30" />
             </div>
+          </div>
+          <div id="otpWrapper" class="hidden">
+            <label class="mb-1 block text-xs font-bold uppercase tracking-wide text-slate-500">OTP</label>
+            <div class="relative">
+              <input id="otp" type="text" autocomplete="one-time-code"
+                class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-teal focus:ring-2 focus:ring-teal/30 text-center tracking-widest font-mono" placeholder="------" />
+            </div>
+            <p class="mt-2 text-xs text-slate-500">OTP sent to your email.</p>
           </div>
           <p id="loginError" class="hidden text-sm font-medium text-red-500"></p>
           <button id="loginBtn" type="submit"
@@ -248,30 +256,66 @@
         loadUsers();
       }
 
+      let isOtpPhase = false;
+
       async function login(e) {
         e.preventDefault();
         const btn = $("loginBtn");
         const err = $("loginError");
         err.classList.add("hidden");
         btn.disabled = true;
-        btn.textContent = "Signing in…";
+        btn.textContent = isOtpPhase ? "Verifying…" : "Signing in…";
+        
         try {
-          const res = await fetch(API_BASE + "/admin/login", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ email: $("email").value.trim(), password: $("password").value }),
-          });
-          const data = await res.json().catch(() => ({}));
-          if (!res.ok) throw new Error(data.detail || "Login failed");
-          localStorage.setItem(TOKEN_KEY, data.access_token);
-          $("password").value = "";
-          showDash();
+          if (!isOtpPhase) {
+            const res = await fetch(API_BASE + "/admin/login", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ email: $("email").value.trim(), password: $("password").value }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.detail || "Login failed");
+            
+            if (data.status === "otp_required") {
+              isOtpPhase = true;
+              $("passwordWrapper").classList.add("hidden");
+              $("email").disabled = true;
+              $("otpWrapper").classList.remove("hidden");
+              $("otp").required = true;
+              $("otp").focus();
+              btn.textContent = "Verify OTP";
+              btn.disabled = false;
+              return;
+            }
+          } else {
+            const res = await fetch(API_BASE + "/admin/login/verify", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ 
+                email: $("email").value.trim(), 
+                password: $("password").value,
+                otp: $("otp").value.trim() 
+              }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.detail || "Verification failed");
+            
+            localStorage.setItem(TOKEN_KEY, data.access_token);
+            $("password").value = "";
+            $("otp").value = "";
+            isOtpPhase = false;
+            $("passwordWrapper").classList.remove("hidden");
+            $("email").disabled = false;
+            $("otpWrapper").classList.add("hidden");
+            $("otp").required = false;
+            
+            showDash();
+          }
         } catch (ex) {
           err.textContent = ex.message || "Login failed";
           err.classList.remove("hidden");
-        } finally {
           btn.disabled = false;
-          btn.textContent = "Sign in";
+          btn.textContent = isOtpPhase ? "Verify OTP" : "Sign in";
         }
       }
 
