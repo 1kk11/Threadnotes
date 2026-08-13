@@ -133,7 +133,7 @@ verified_emails: Dict[str, datetime] = {}
 
 _users_cont = None
 
-def check_quota(user_email: str, quota_type: str, duration_sec: float = 0):
+def check_quota(user_email: str, duration_sec: float = 0):
     users_cont = get_users_container()
     user_list = list(
         users_cont.query_items(
@@ -147,10 +147,17 @@ def check_quota(user_email: str, quota_type: str, duration_sec: float = 0):
         
     user_doc = user_list[0]
     quotas = user_doc.get("quotas", {})
-    if quota_type not in quotas:
-        return # Skip if user has old format
+    
+    if "TOTAL" not in quotas:
+        total_allocated = sum(q.get("allocated", 0) for q in quotas.values() if isinstance(q, dict))
+        total_used = sum(q.get("used", 0) for q in quotas.values() if isinstance(q, dict))
+        if total_allocated == 0:
+            total_allocated = 36000
+        quotas = {"TOTAL": {"allocated": total_allocated, "used": total_used}}
+        user_doc["quotas"] = quotas
+        users_cont.upsert_item(user_doc)
         
-    q = quotas[quota_type]
+    q = quotas["TOTAL"]
     
     if q["used"] >= q["allocated"]:
         raise HTTPException(status_code=403, detail="Quota exceeded for you. Please ask admin for approval.")
@@ -515,10 +522,7 @@ def signup(user: UserSignup):
         "createdAt": datetime.now(timezone.utc).isoformat(),
         "status": "pending",
         "quotas": {
-            "L": {"allocated": 36000, "used": 0},
-            "U": {"allocated": 36000, "used": 0},
-            "D": {"allocated": 36000, "used": 0},
-            "B": {"allocated": 36000, "used": 0}
+            "TOTAL": {"allocated": 36000, "used": 0}
         }
     }
     users_cont.create_item(user_doc)
@@ -1190,7 +1194,7 @@ async def diarize_stream(
         
     user_email = user.get("sub")
     # Quick check before processing
-    check_quota(user_email, "D", 0)
+    check_quota(user_email, 0)
     
     try:
         segments = await asyncio.to_thread(
@@ -1207,7 +1211,7 @@ async def diarize_stream(
 
     duration = segments[-1]["end"] if segments else 0
     if duration > 0:
-        check_quota(user_email, "D", duration)
+        check_quota(user_email, duration)
 
     return {
         "status": "success",
@@ -1260,7 +1264,7 @@ async def transcribe_stream(
         raise HTTPException(status_code=400, detail="Empty audio upload.")
         
     user_email = user.get("sub")
-    check_quota(user_email, "U", 0)
+    check_quota(user_email, 0)
     
     try:
         text, duration = await asyncio.to_thread(
@@ -1276,7 +1280,7 @@ async def transcribe_stream(
         return {"status": "error", "message": _friendly_diarize_error(exc)}
 
     if duration > 0:
-        check_quota(user_email, "U", duration)
+        check_quota(user_email, duration)
 
     return {"status": "success", "text": text}
 
@@ -1433,7 +1437,7 @@ class InitJobRequest(BaseModel):
 @app.post("/jobs/init")
 async def init_meeting_job(req: InitJobRequest, user: dict = Depends(get_current_user)):
     user_email = user.get("sub")
-    check_quota(user_email, "B", 0)
+    check_quota(user_email, 0)
     
     meeting_id = str(int(datetime.now(timezone.utc).timestamp() * 1000))
     # If the frontend passes a placeholder topic, we can update it to include the neat ID.
