@@ -1327,7 +1327,7 @@ async def background_worker_pool():
                 # Check quota before processing
                 user_email = meeting_job.get("user_id")
                 try:
-                    await asyncio.to_thread(check_quota, user_email, "B", 0)
+                    await asyncio.to_thread(check_quota, user_email, 0)
                 except HTTPException as e:
                     raise Exception(e.detail)
                 
@@ -1346,7 +1346,7 @@ async def background_worker_pool():
                 duration = segments[-1]["end"] if segments else 0
                 if duration > 0:
                     try:
-                        await asyncio.to_thread(check_quota, user_email, "B", duration)
+                        await asyncio.to_thread(check_quota, user_email, duration)
                     except Exception:
                         pass # Non-fatal if quota exceeded after processing chunk
                 
