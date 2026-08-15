@@ -9,7 +9,10 @@ export default function NavigationListener() {
   useEffect(() => {
     if (typeof window !== "undefined" && (window as any).electronAPI?.onNavigate) {
       const unsubscribe = (window as any).electronAPI.onNavigate((route: string) => {
-        router.push(route);
+        // Instead of router.push (which crashes static export apps if route is missing),
+        // we dispatch a custom event that Dashboard.tsx can listen to.
+        const event = new CustomEvent("app-navigate", { detail: { route } });
+        window.dispatchEvent(event);
       });
       return unsubscribe;
     }

@@ -310,6 +310,18 @@ export default function Dashboard() {
   }, [isRecording, isPaused]);
 
   useEffect(() => {
+    const handleNavigate = (e: Event) => {
+      const customEvent = e as CustomEvent;
+      const route = customEvent.detail?.route;
+      if (route && route.startsWith("/meetings")) {
+        setView("meetings");
+      }
+    };
+    window.addEventListener("app-navigate", handleNavigate);
+    return () => window.removeEventListener("app-navigate", handleNavigate);
+  }, []);
+
+  useEffect(() => {
     const read = () => setMeetingsCount(loadMeetings().length);
     read();
     window.addEventListener(MEETINGS_EVENT, read);
