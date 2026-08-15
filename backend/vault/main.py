@@ -851,7 +851,9 @@ def admin_update_quota(user_id: str, req: QuotaUpdateRequest, admin: dict = Depe
         
     # Update allocated time
     for q_type, q_data in req.quotas.items():
-        if q_type in user_doc["quotas"] and "allocated" in q_data:
+        if "allocated" in q_data:
+            if q_type not in user_doc["quotas"]:
+                user_doc["quotas"][q_type] = {"allocated": 0, "used": 0}
             user_doc["quotas"][q_type]["allocated"] = q_data["allocated"]
             
     users_cont.upsert_item(user_doc)

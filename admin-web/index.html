@@ -223,10 +223,25 @@
 
       function parseDur(str) {
         if (!str) return 0;
+        
+        // Handle human-readable formats like "5m", "5 min", "2h", "1.5h"
+        if (/[a-zA-Z]/.test(str)) {
+          let sec = 0;
+          const hMatch = str.match(/([\d.]+)\s*(h|hr|hrs|hour|hours)/i);
+          const mMatch = str.match(/([\d.]+)\s*(m|min|mins|minute|minutes)/i);
+          const sMatch = str.match(/([\d.]+)\s*(s|sec|secs|second|seconds)/i);
+          if (hMatch) sec += parseFloat(hMatch[1]) * 3600;
+          if (mMatch) sec += parseFloat(mMatch[1]) * 60;
+          if (sMatch) sec += parseFloat(sMatch[1]);
+          if (sec > 0) return Math.floor(sec);
+        }
+
         const p = str.split(':').map(x => parseInt(x) || 0);
-        if (p.length === 3) return p[0]*3600 + p[1]*60 + p[2];
-        if (p.length === 2) return p[0]*60 + p[1];
-        return p[0];
+        if (p.length === 3) return p[0]*3600 + p[1]*60 + p[2]; // HH:MM:SS
+        if (p.length === 2) return p[0]*60 + p[1];             // MM:SS
+        
+        // If a single number is typed, default to Hours since the modal title says "Edit Quota (Hours)"
+        return p[0] * 3600;
       }
 
       function initials(name, email) { return (name || email || "?").trim().charAt(0).toUpperCase(); }
