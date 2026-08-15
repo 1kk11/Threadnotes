@@ -154,13 +154,28 @@
 
     <div id="quotaModal" class="fixed inset-0 z-50 hidden items-center justify-center bg-navy/40 p-4 backdrop-blur-sm">
       <div class="w-full max-w-md rounded-2xl border border-white/70 bg-white p-7 shadow-2xl">
-        <h3 class="text-lg font-bold">Edit Quota (Hours)</h3>
-        <p class="mt-1 text-xs text-slate-500 mb-4">Set allocated hours for <span id="quotaModalName" class="font-semibold text-navy"></span></p>
+        <h3 class="text-lg font-bold">Edit Quota</h3>
+        <p class="mt-1 text-xs text-slate-500 mb-4">Set allocated time for <span id="quotaModalName" class="font-semibold text-navy"></span></p>
         
         <div class="space-y-4">
-                    <div class="flex items-center justify-between">
-            <span class="text-sm font-semibold">Total Quota</span>
-            <input type="text" id="quota_TOTAL" placeholder="HH:MM:SS" class="w-32 rounded-lg border px-3 py-1 text-sm outline-none focus:border-teal text-center">
+          <div class="flex flex-col gap-2">
+            <span class="text-sm font-semibold text-slate-700">Total Quota</span>
+            <div class="flex items-center justify-center gap-2 rounded-xl bg-slate-50 p-3 border border-slate-100">
+              <div class="flex flex-col items-center">
+                <input type="number" id="quota_h" min="0" class="w-16 rounded-lg border border-slate-200 bg-white px-1 py-1.5 text-center text-lg font-bold text-navy outline-none focus:border-teal focus:ring-2 focus:ring-teal/30" placeholder="00">
+                <span class="mt-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">Hours</span>
+              </div>
+              <span class="mb-5 text-xl font-bold text-slate-300">:</span>
+              <div class="flex flex-col items-center">
+                <input type="number" id="quota_m" min="0" max="59" class="w-16 rounded-lg border border-slate-200 bg-white px-1 py-1.5 text-center text-lg font-bold text-navy outline-none focus:border-teal focus:ring-2 focus:ring-teal/30" placeholder="00">
+                <span class="mt-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">Mins</span>
+              </div>
+              <span class="mb-5 text-xl font-bold text-slate-300">:</span>
+              <div class="flex flex-col items-center">
+                <input type="number" id="quota_s" min="0" max="59" class="w-16 rounded-lg border border-slate-200 bg-white px-1 py-1.5 text-center text-lg font-bold text-navy outline-none focus:border-teal focus:ring-2 focus:ring-teal/30" placeholder="00">
+                <span class="mt-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">Secs</span>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -446,7 +461,10 @@
         let sec = 0;
         if (user.quotas?.TOTAL) { sec = user.quotas.TOTAL.allocated || 0; }
         else { ['L','U','D','B'].forEach(t => sec += user.quotas?.[t]?.allocated || 0); }
-        $("quota_TOTAL").value = fmtDur(sec);
+        
+        $("quota_h").value = Math.floor(sec / 3600);
+        $("quota_m").value = Math.floor((sec % 3600) / 60);
+        $("quota_s").value = Math.floor(sec % 60);
 
         $("quotaModal").classList.remove("hidden"); $("quotaModal").classList.add("flex");
       }
@@ -507,8 +525,11 @@
         btn.textContent = "Saving...";
         try {
           const req = { quotas: {} };
-          const val = $("quota_TOTAL").value;
-          req.quotas["TOTAL"] = { allocated: parseDur(val) };
+          const h = parseInt($("quota_h").value) || 0;
+          const m = parseInt($("quota_m").value) || 0;
+          const s = parseInt($("quota_s").value) || 0;
+          const totalSeconds = (h * 3600) + (m * 60) + s;
+          req.quotas["TOTAL"] = { allocated: totalSeconds };
 
           const res = await fetch(API_BASE + `/admin/users/${pendingUserId}/quota`, { 
             method: "POST", 
