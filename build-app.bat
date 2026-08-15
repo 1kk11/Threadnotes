@@ -16,8 +16,8 @@ if not exist "%~dp0frontend\resources\ffmpeg.exe" (
 echo.
 echo Building Electron app with electron-builder...
 cd /d "%~dp0frontend"
-npm install
-npm run dist:win
+call npm install
+call npm run dist:win
 
 if errorlevel 1 (
   echo Electron packaging failed.
