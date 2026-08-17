@@ -749,8 +749,8 @@ export default function MyMeetings() {
                   { key: "today", label: "Today" },
                   { key: "week", label: "This Week" },
                   { key: "month", label: "This Month" },
-                  { key: "diarized", label: "Diarized" },
-                  { key: "not-diarized", label: "Not Diarized" },
+                  { key: "diarized", label: "Diarised" },
+                  { key: "not-diarized", label: "Not Diarised" },
                 ] as const
               ).map((f) => (
                 <button
@@ -1088,11 +1088,11 @@ export default function MyMeetings() {
                   />
                 )}
                 <span className="relative">
-                  {diarizing
-                    ? `Diarizing… ${Math.round(diarizeProgress)}%`
+                    {isDiarizing
+                    ? `Creating Transcript… ${Math.round(diarizeProgress)}%`
                     : detailView === "diarize"
                       ? "Transcript"
-                      : "Diarize"}
+                      : "Create Transcript"}
                 </span>
               </button>
             </div>
@@ -1114,9 +1114,6 @@ export default function MyMeetings() {
               ) : !mtgHighlightsOnly && detailView === "transcript" ? (
                 <div className="whitespace-pre-wrap leading-relaxed">
                   {(() => {
-                    // Karaoke in transcript view too: flatten the diarized words
-                    // (with their timings) into one stream and highlight the word
-                    // being spoken. Falls back to plain text if no word timings.
                     const rows = getDiarizedRows(selectedMeeting);
                     const allWords = rows
                       ? rows.flatMap((r) => r.words ?? [])
@@ -1173,14 +1170,14 @@ export default function MyMeetings() {
                   if (!allRows) {
                     return (
                       <div className="flex flex-col items-center justify-center gap-3 py-16 text-center">
-                        <p className="text-sm text-slate-500">
-                          This meeting hasn&apos;t been diarized yet.
+                        <p className="mb-4 text-[15px] text-slate-500">
+                          This meeting hasn&apos;t been diarised yet.
                         </p>
                         <button
                           onClick={() => setShowDiarizeConfirm(true)}
-                          className="rounded-lg bg-linear-to-r from-violet-500 to-blue-500 px-5 py-2 text-sm font-bold text-white shadow-sm"
+                          className="rounded-lg bg-linear-to-r from-[#2FB5AA] to-[#2E6DBE] px-6 py-2.5 text-sm font-semibold text-white shadow-md transition-all hover:-translate-y-0.5 hover:shadow-lg"
                         >
-                          Diarize now
+                          Create Transcript now
                         </button>
                       </div>
                     );
@@ -1298,8 +1295,8 @@ export default function MyMeetings() {
       {showDiarizeConfirm && selectedMeeting && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-sm">
           <div className="w-full max-w-sm rounded-3xl border border-slate-100 bg-white p-7 shadow-2xl">
-            <h3 className="text-xl font-bold text-slate-900">
-              Diarize this meeting?
+            <h3 className="mb-2 text-xl font-bold text-slate-800">
+              Create Transcript for this meeting?
             </h3>
             {selectedMeeting.audioPath ? (
               <>
@@ -1316,17 +1313,17 @@ export default function MyMeetings() {
                   </button>
                   <button
                     onClick={() => runReDiarize(selectedMeeting)}
-                    className="flex-1 rounded-xl bg-linear-to-r from-violet-500 to-blue-500 py-3 text-sm font-bold text-white shadow-lg shadow-violet-500/25 transition-all hover:from-violet-600 hover:to-blue-600"
+                    className="rounded-xl bg-linear-to-r from-[#2FB5AA] to-[#2E6DBE] px-6 py-2.5 font-semibold text-white shadow-md transition-all hover:-translate-y-0.5 hover:shadow-lg"
                   >
-                    Diarize
+                    Create Transcript
                   </button>
                 </div>
               </>
             ) : (
               <>
                 <p className="mt-2 text-sm text-slate-500">
-                  The original audio for this meeting isn&apos;t available, so it
-                  can&apos;t be diarized now.
+                  This meeting doesn&apos;t have a local audio file so it
+                  can&apos;t be diarised now.
                 </p>
                 <div className="mt-7">
                   <button
@@ -1345,12 +1342,9 @@ export default function MyMeetings() {
       {showDiarizeRetry && selectedMeeting && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-sm">
           <div className="w-full max-w-sm rounded-3xl border border-slate-100 bg-white p-7 shadow-2xl">
-            <h3 className="text-xl font-bold text-slate-900">
-              Diarization failed
+            <h3 className="mb-2 text-xl font-bold text-red-600">
+              We couldn&apos;t diarise this meeting. You can retry.
             </h3>
-            <p className="mt-2 text-sm text-slate-500">
-              We couldn&apos;t diarize this meeting. You can retry.
-            </p>
             <div className="mt-7 flex gap-3">
               <button
                 onClick={() => setShowDiarizeRetry(false)}

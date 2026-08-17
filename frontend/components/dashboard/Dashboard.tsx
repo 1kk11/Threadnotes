@@ -564,7 +564,7 @@ export default function Dashboard() {
       setFinishProgress(100);
       setIsFinishing(false);
       setStatusMessage(
-        "Transcript ready — click Diarize to separate speakers, or Save.",
+        "Transcript ready - click to show detailed transcript or save.",
       );
     } catch (e: any) {
       if (sid !== sessionIdRef.current) return;
@@ -808,7 +808,7 @@ export default function Dashboard() {
       setActiveTab("live");
       setStatusMessage(
         text.trim()
-          ? "Transcript ready — click Diarize to separate speakers."
+          ? "Transcript ready - click to show detailed transcript or save."
           : "No speech detected in the uploaded file.",
       );
     } catch (e: any) {
@@ -1392,7 +1392,7 @@ export default function Dashboard() {
                                 disabled={isDiarizing || !audioFilePath}
                                 className="shrink-0 rounded-lg bg-linear-to-r from-[#2FB5AA] to-[#2E6DBE] px-6 py-2 text-sm font-semibold text-white shadow-sm transition-all hover:from-[#28a29a] hover:to-[#2a61a8] disabled:cursor-not-allowed disabled:opacity-60"
                               >
-                                {isDiarizing ? "Diarizing…" : "Diarize"}
+                                {isDiarizing ? "Creating Transcript…" : "Create Transcript"}
                               </button>
                             </div>
                           ) : transcriptText ? (
@@ -1405,12 +1405,12 @@ export default function Dashboard() {
                               className="shrink-0 rounded-lg bg-linear-to-r from-[#2FB5AA] to-[#2E6DBE] px-4 py-1.5 text-xs font-semibold text-white shadow-sm transition-all hover:from-[#28a29a] hover:to-[#2a61a8]"
                             >
                               {transcriptView === "diarize"
-                                ? "Diarize"
+                                ? "Diarise"
                                 : "Transcript"}
                             </button>
                           ) : (
                             <span className="shrink-0 rounded-lg bg-slate-100 px-4 py-1.5 text-xs font-semibold text-slate-500 shadow-sm">
-                              Diarized
+                              Diarised
                             </span>
                           )}
                         </div>
@@ -1810,7 +1810,7 @@ export default function Dashboard() {
                 }}
                 className="flex-1 rounded-xl bg-linear-to-r from-[#2FB5AA] to-[#2E6DBE] py-3 text-sm font-bold text-white shadow-lg shadow-[#2FB5AA]/25 transition-all hover:from-[#28a29a] hover:to-[#2a61a8]"
               >
-                Diarize Now
+                Create Transcript Now
               </button>
               <button
                 onClick={() => {
@@ -1819,7 +1819,7 @@ export default function Dashboard() {
                 }}
                 className="flex-1 rounded-xl bg-slate-100 py-3 text-sm font-bold text-slate-700 transition-colors hover:bg-slate-200"
               >
-                Diarize in Background
+                Create Transcript in Background
               </button>
             </div>
           </div>
