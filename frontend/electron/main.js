@@ -565,7 +565,7 @@ if (!gotTheLock) {
 
         // Silent Wake-Up Ping: Instantly wake up the backend server on application startup.
         // If launched via system boot (--hidden), this ensures the backend is awake before the user ever opens the UI.
-        const API_URL = isDev ? "http://localhost:8000" : "https://threadnotes-backend-ih96.onrender.com";
+        const API_URL = "https://threadnotes-backend-ih96.onrender.com";
         const sendWakeUpPing = () => {
             try {
                 const req = net.request(API_URL);

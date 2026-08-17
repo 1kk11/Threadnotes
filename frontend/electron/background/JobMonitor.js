@@ -2,7 +2,7 @@ const { Notification, app } = require('electron');
 const path = require('path');
 
 const isDev = !app.isPackaged;
-const API_URL = isDev ? "http://localhost:8000" : "https://threadnotes-backend-ih96.onrender.com";
+const API_URL = "https://threadnotes-backend-ih96.onrender.com";
 
 class JobMonitor {
     constructor(store) {

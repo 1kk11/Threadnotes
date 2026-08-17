@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import Dashboard from "@/components/dashboard/Dashboard";
 import { getValidToken, clearSession } from "@/lib/auth";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://threadnotes-backend-ih96.onrender.com";
 
 function SplashScreen({ progress }: { progress: number }) {
   const pct = Math.min(100, Math.max(0, progress));

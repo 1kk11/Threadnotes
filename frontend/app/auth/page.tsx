@@ -31,7 +31,7 @@ export default function AuthPage() {
   );
   const router = useRouter();
 
-  const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+  const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://threadnotes-backend-ih96.onrender.com";
 
   useEffect(() => {
     if (getValidToken()) router.replace("/");

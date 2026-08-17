@@ -8,7 +8,7 @@ export default function AuthInterceptor() {
   useEffect(() => {
     if (typeof window === "undefined") return;
 
-    const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+    const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://threadnotes-backend-ih96.onrender.com";
     const originalFetch = window.fetch.bind(window);
     let redirecting = false;
 

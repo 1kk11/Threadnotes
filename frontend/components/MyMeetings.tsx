@@ -15,7 +15,7 @@ import {
 import { diarizeAudioFile } from "@/lib/diarize";
 import AudioPlayer from "@/components/ui/AudioPlayer";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL && process.env.NEXT_PUBLIC_API_URL !== "http://localhost:8000" ? process.env.NEXT_PUBLIC_API_URL : "https://threadnotes-backend-ih96.onrender.com";
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://threadnotes-backend-ih96.onrender.com";
 
 
 type TranscriptEntry = { speaker: string; text: string; timestamp: string };
@@ -1088,7 +1088,7 @@ export default function MyMeetings() {
                   />
                 )}
                 <span className="relative">
-                    {isDiarizing
+                    {diarizing
                     ? `Creating Transcript… ${Math.round(diarizeProgress)}%`
                     : detailView === "diarize"
                       ? "Transcript"

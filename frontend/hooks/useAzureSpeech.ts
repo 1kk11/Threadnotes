@@ -1,7 +1,7 @@
 import { useCallback, useRef, useState } from "react";
 import * as SpeechSDK from "microsoft-cognitiveservices-speech-sdk";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://threadnotes-backend-ih96.onrender.com";
 
 const TOKEN_REFRESH_MS = 8 * 60 * 1000;
 
