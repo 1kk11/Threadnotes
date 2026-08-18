@@ -31,9 +31,12 @@ load_dotenv(os.path.join(_BACKEND_DIR, ".env"))
 
 os.environ["DXAI_API_KEY"] = "dev_roemQno5fKxjdN9IUpi3__GaFDRPAmEvjXpyDaUuJ8s"
 os.environ["DXAI_BASE_URL"] = "https://ai-gateway-platform-cex4.onrender.com"
-os.environ["GATEWAY_PROVIDERS"] = "AzureSpeechKey"
+os.environ["GATEWAY_PROVIDERS"] = "AzureOpenAI,AzureSpeechKey"
 os.environ["GATEWAY_TIMEOUT"] = "60"
-from gateway_credentials import secret
+os.environ["GATEWAY_PROXY_AI"] = "true"
+os.environ["GATEWAY_AI_PROVIDER"] = "AzureOpenAI"
+
+from .gateway_credentials import secret, source_of
 
 SECRET_KEY = os.getenv("JWT_SECRET", "threadnotes-super-secret-key")
 ALGORITHM = "HS256"
@@ -104,12 +107,13 @@ async def _diagnose_env():
         "AZURE_SPEECH_KEY",
         "AZURE_SPEECH_REGION",
     ):
-        val = os.getenv(key)
+        val = secret(key)
         _env_log.info(
-            "ENV %-20s present=%-5s length=%s",
+            "ENV %-20s present=%-5s length=%-4s source=%s",
             key,
             bool(val),
             len(val) if val else 0,
+            source_of(key),
         )
 
     for label, path in (
@@ -266,8 +270,43 @@ def get_blob_container():
 
 
 def build_openai_client():
-    from dxai import DXAI
-    return DXAI(provider="AzureOpenAI", timeout=1500, max_retries=0)
+    from openai import OpenAI, AzureOpenAI
+    
+    if os.getenv("GATEWAY_PROXY_AI", "").strip().lower() in ("1", "true", "yes"):
+        gw_token = os.getenv("DXAI_API_KEY", "").strip()
+        gw_base = (os.getenv("DXAI_BASE_URL") or "").strip().rstrip("/")
+        if not gw_token or not gw_base:
+            raise HTTPException(
+                status_code=500,
+                detail="GATEWAY_PROXY_AI is on but DXAI_API_KEY/DXAI_BASE_URL are unset.",
+            )
+        return OpenAI(
+            api_key=gw_token,
+            base_url=f"{gw_base}/gateway",
+            default_headers={
+                "X-Gateway-Provider": os.getenv("GATEWAY_AI_PROVIDER", "AzureOpenAI"),
+                "X-Gateway-Api-Version": secret(
+                    "AZURE_OPENAI_API_VERSION", "2025-04-01-preview"
+                ).strip(),
+            },
+            timeout=1500,
+            max_retries=0,
+        )
+
+    endpoint = secret("AZURE_OPENAI_ENDPOINT").strip()
+    key = (secret("AZURE_OPENAI_KEY") or secret("OPENAI_API_KEY")).strip()
+    if not key:
+        raise HTTPException(status_code=500,
+                            detail="OpenAI/Azure OpenAI key is missing in the vault.")
+    if endpoint:
+        return AzureOpenAI(
+            api_key=key,
+            api_version=secret("AZURE_OPENAI_API_VERSION", "2025-04-01-preview").strip(),
+            azure_endpoint=endpoint,
+            timeout=1500,
+            max_retries=0,
+        )
+    return OpenAI(api_key=key, timeout=1500, max_retries=0)
 
 
 def interpolate_words(text: str, start: float, end: float) -> list:
@@ -988,6 +1027,23 @@ def _friendly_diarize_error(exc: Exception) -> str:
             "We couldn't reach the transcription service. "
             "Please check your internet connection and try again."
         )
+    if any(
+        f"{period} {unit} limit exceeded" in msg
+        for period in ("daily", "monthly")
+        for unit in ("request", "token")
+    ):
+        unit = "token" if "token limit exceeded" in msg else "request"
+        if "daily" in msg:
+            period, resets = "daily", " It resets tomorrow."
+        elif "monthly" in msg:
+            period, resets = "monthly", " It resets at the start of next month."
+        else:
+            period, resets = "", ""
+        quota = f"{period} {unit}".strip()
+        return (
+            f"You have reached the limit — your {quota} quota has been used up."
+            f"{resets} Please contact your administrator to increase it."
+        )
     if status == 429 or "rate limit" in msg or "ratelimit" in name:
         return (
             "The transcription service is busy right now. "
@@ -1114,7 +1170,7 @@ def _renumber_speakers(segments: List[dict]) -> List[dict]:
 
 def _run_diarization(audio_bytes: bytes, filename: str, content_type: str = "") -> list:
     client = build_openai_client()
-    deployment = os.getenv("AZURE_DIARIZE_DEPLOYMENT", "gpt-4o-transcribe-diarize").strip()
+    deployment = secret("AZURE_DIARIZE_DEPLOYMENT", "gpt-4o-transcribe-diarize").strip()
 
     safe_name = filename or "audio.ogg"
     mime = content_type or "audio/ogg"
@@ -1218,8 +1274,8 @@ async def diarize_stream(
 def _run_transcription(audio_bytes: bytes, filename: str, content_type: str = "") -> str:
     client = build_openai_client()
     deployment = (
-        os.getenv("AZURE_TRANSCRIBE_DEPLOYMENT")
-        or os.getenv("AZURE_WHISPER_DEPLOYMENT")
+        secret("AZURE_TRANSCRIBE_DEPLOYMENT")
+        or secret("AZURE_WHISPER_DEPLOYMENT")
         or "gpt-4o-transcribe"
     ).strip()
     safe_name = filename or "audio.ogg"
@@ -1228,7 +1284,7 @@ def _run_transcription(audio_bytes: bytes, filename: str, content_type: str = ""
         resp = client.audio.transcriptions.create(
             model=deployment,
             file=(safe_name, audio_bytes, mime),
-            response_format="text",
+            response_format="json",
         )
     except Exception as exc:
         msg = str(exc).lower()
