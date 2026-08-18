@@ -328,10 +328,6 @@ export default function AudioPlayer({
           const d = el.duration;
           if (Number.isFinite(d) && d > 0) {
             setDuration(d);
-            if (resolvingRef.current) {
-              resolvingRef.current = false;
-              el.currentTime = 0;
-            }
           }
         }}
         onTimeUpdate={(e) => {
@@ -341,8 +337,13 @@ export default function AudioPlayer({
           onTimeUpdate?.(t);
         }}
         onSeeked={(e) => {
-          if (resolvingRef.current) return;
-          const t = e.currentTarget.currentTime;
+          const el = e.currentTarget;
+          if (resolvingRef.current) {
+            resolvingRef.current = false;
+            el.currentTime = 0;
+            return;
+          }
+          const t = el.currentTime;
           setCurrent(t);
           onTimeUpdate?.(t);
         }}
