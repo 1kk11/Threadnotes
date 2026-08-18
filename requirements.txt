@@ -30,3 +30,6 @@ google-auth-oauthlib==1.2.0
 # Legacy document/audio helpers (from old backend/requirements.txt)
 pydub
 python-docx
+
+dxai-sdk @ git+https://github.com/YashGupta0207/ai-gateway-platform.git#subdirectory=sdk
+dxai-sdk @ git+https://github.com/YashGupta0207/ai-gateway-platform.git#subdirectory=sdk

@@ -29,10 +29,16 @@ from dotenv import load_dotenv
 _BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 load_dotenv(os.path.join(_BACKEND_DIR, ".env"))
 
+os.environ["DXAI_API_KEY"] = "dev_roemQno5fKxjdN9IUpi3__GaFDRPAmEvjXpyDaUuJ8s"
+os.environ["DXAI_BASE_URL"] = "https://ai-gateway-platform-cex4.onrender.com"
+os.environ["GATEWAY_PROVIDERS"] = "AzureSpeechKey"
+os.environ["GATEWAY_TIMEOUT"] = "60"
+from gateway_credentials import secret
+
 SECRET_KEY = os.getenv("JWT_SECRET", "threadnotes-super-secret-key")
 ALGORITHM = "HS256"
-AZURE_SPEECH_KEY = os.getenv("AZURE_SPEECH_KEY", "").strip()
-AZURE_SPEECH_REGION = os.getenv("AZURE_SPEECH_REGION", "").strip()
+AZURE_SPEECH_KEY = secret("AZURE_SPEECH_KEY").strip()
+AZURE_SPEECH_REGION = secret("AZURE_SPEECH_REGION").strip()
 
 COSMOS_ENDPOINT = os.getenv("COSMOS_ENDPOINT")
 COSMOS_KEY = os.getenv("COSMOS_KEY")
@@ -260,21 +266,8 @@ def get_blob_container():
 
 
 def build_openai_client():
-    from openai import OpenAI, AzureOpenAI
-
-    endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "").strip()
-    key = (os.getenv("AZURE_OPENAI_KEY") or os.getenv("OPENAI_API_KEY") or "").strip()
-    if not key:
-        raise HTTPException(status_code=500, detail="OpenAI/Azure OpenAI key is missing in the vault.")
-    if endpoint:
-        return AzureOpenAI(
-            api_key=key,
-            api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2025-04-01-preview").strip(),
-            azure_endpoint=endpoint,
-            timeout=1500,
-            max_retries=0,
-        )
-    return OpenAI(api_key=key, timeout=1500, max_retries=0)
+    from dxai import DXAI
+    return DXAI(provider="AzureOpenAI", timeout=1500, max_retries=0)
 
 
 def interpolate_words(text: str, start: float, end: float) -> list:
