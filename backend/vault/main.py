@@ -29,13 +29,6 @@ from dotenv import load_dotenv
 _BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 load_dotenv(os.path.join(_BACKEND_DIR, ".env"))
 
-os.environ["DXAI_API_KEY"] = "dev_roemQno5fKxjdN9IUpi3__GaFDRPAmEvjXpyDaUuJ8s"
-os.environ["DXAI_BASE_URL"] = "https://ai-gateway-platform-cex4.onrender.com"
-os.environ["GATEWAY_PROVIDERS"] = "AzureOpenAI,AzureSpeechKey"
-os.environ["GATEWAY_TIMEOUT"] = "60"
-os.environ["GATEWAY_PROXY_AI"] = "true"
-os.environ["GATEWAY_AI_PROVIDER"] = "AzureOpenAI"
-
 from .gateway_credentials import secret, source_of
 
 SECRET_KEY = os.getenv("JWT_SECRET", "threadnotes-super-secret-key")
